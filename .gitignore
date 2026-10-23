@@ -1,0 +1,40 @@
+# ===== GTL-Audio-CharaVoice =====
+# Large or machine-local content never goes into git.
+/.venv/
+/engines/
+/models/
+/data/
+/_internal/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Frontend / Tauri (see also app/.gitignore and app/src-tauri/.gitignore)
+node_modules/
+/app/dist/
+/app/src-tauri/target/
+/app/src-tauri/binaries/
+
+# Audio / model files anywhere in the tree (third-party material is never committed)
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.opus
+*.m4a
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.7z
+
+# Misc
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

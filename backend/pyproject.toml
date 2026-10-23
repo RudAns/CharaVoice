@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "charavoice"
+version = "0.1.0"
+description = "Local character voice service: speak (GPT-SoVITS) and listen (sherpa-onnx) for any agent."
+requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "sounddevice>=0.4.7",
+    "sherpa-onnx>=1.12",
+    "websockets>=12",
+    "mcp>=2.0",
+]
+
+[project.scripts]
+charavoice = "charavoice.cli:main"
+charavoice-mcp = "charavoice.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["charavoice*"]
