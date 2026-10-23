@@ -54,7 +54,8 @@ export function Orb({ class: cls }: { class?: string }) {
   const [fallback, setFallback] = useState(false);
 
   useEffect(() => {
-    const cv = canvas.current!;
+    const cv = canvas.current;
+    if (!cv) return;
     const gl = cv.getContext("webgl", { premultipliedAlpha: true, alpha: true, antialias: true });
     if (!gl || gl.isContextLost()) {
       setFallback(true);

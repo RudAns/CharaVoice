@@ -761,3 +761,100 @@ async def dataset_clear(vid: str):
     _voice_or_404(vid)
     await asyncio.to_thread(dataset.clear, vid)
     return {"cleared": True}
+
+
+@app.post("/v1/voices/{vid}/dataset/sources", dependencies=[Depends(auth)])
+async def dataset_add_source(vid: str, file: UploadFile = File(...)):
+    """Upload an audio/video file; it waits in the trim editor until processed."""
+    _voice_or_404(vid)
+    raw = await file.read()
+    return await asyncio.to_thread(dataset.add_source, vid, file.filename or "upload", raw)
+
+
+@app.get("/v1/voices/{vid}/dataset/sources/{sid}/peaks", dependencies=[Depends(auth)])
+async def dataset_peaks(vid: str, sid: str, per_second: int = 100):
+    if not dataset.work_wav(vid, sid).exists():
+        raise ApiError(404, "找不到这个素材", "not_found")
+    return await asyncio.to_thread(dataset.peaks, vid, sid, per_second)
+
+
+@app.get("/v1/voices/{vid}/dataset/sources/{sid}/audio", dependencies=[Depends(auth)])
+async def dataset_source_audio(vid: str, sid: str):
+    p = dataset.work_wav(vid, sid)
+    if not p.exists():
+        raise ApiError(404, "找不到这个素材", "not_found")
+    return FileResponse(p, media_type="audio/wav")
+
+
+class ProcessBody(BaseModel):
+    ranges: list[list[float]] | None = Field(default=None, description="保留的时间段 [[开始秒, 结束秒], ...]；省略 = 整段")
+    separate: bool = True
+
+
+@app.post("/v1/voices/{vid}/dataset/sources/{sid}/process", dependencies=[Depends(auth)])
+async def dataset_process(vid: str, sid: str, body: ProcessBody):
+    try:
+        job = dataset.start_process(vid, sid, body.ranges, body.separate)
+    except KeyError:
+        raise ApiError(404, "找不到这个素材", "not_found")
+    return job.public()
+
+
+@app.delete("/v1/voices/{vid}/dataset/sources/{sid}", dependencies=[Depends(auth)])
+async def dataset_remove_source(vid: str, sid: str):
+    try:
+        await asyncio.to_thread(dataset.remove_source, vid, sid)
+    except KeyError:
+        raise ApiError(404, "找不到这个素材", "not_found")
+    return {"removed": sid}
+
+
+# ---------------------------------------------------------------- loopback recording
+from .recorder import recorder  # noqa: E402
+from . import recorder as recorder_mod  # noqa: E402
+
+
+@app.get("/v1/record/devices", dependencies=[Depends(auth)])
+async def record_devices():
+    try:
+        return {"devices": await asyncio.to_thread(recorder_mod.devices)}
+    except Exception as e:
+        raise ApiError(500, f"无法列出可录制的设备：{e}", "record_failed")
+
+
+class RecordStart(BaseModel):
+    voice: str
+    device: int | None = None
+    consent_ack: bool = Field(False, description="确认只录制本人或已获授权的声音")
+
+
+@app.post("/v1/record/start", dependencies=[Depends(auth)])
+async def record_start(body: RecordStart):
+    v = _voice_or_404(body.voice)
+    if not body.consent_ack:
+        raise ApiError(400, "只录制本人或已获授权的声音。请确认后再开始录制（consent_ack=true）。", "consent_required")
+    if not v.get("consent"):
+        raise ApiError(400, "这个声音没有授权记录，不能录制素材。", "consent_required")
+    rec = await asyncio.to_thread(recorder.start, body.voice, dataset.ddir(body.voice) / "sources", body.device)
+    return {"id": rec.id, "device": rec.device}
+
+
+@app.post("/v1/record/stop", dependencies=[Depends(auth)])
+async def record_stop():
+    rec = recorder.stop()
+    if not rec:
+        raise ApiError(400, "当前没有在录音。")
+    await asyncio.to_thread(rec.stopped.wait, 10)
+    if rec.seconds < 1.0:
+        rec.path.unlink(missing_ok=True)
+        raise ApiError(400, rec.error or "录音太短（不到 1 秒），已丢弃。")
+    src = await asyncio.to_thread(dataset.add_source, rec.voice, f"录音 {time.strftime('%H:%M:%S', time.localtime(rec.started))}", None, rec.path, "loopback")
+    return {"recording": {"id": rec.id, "seconds": round(rec.seconds, 2), "error": rec.error}, "source": src}
+
+
+@app.get("/v1/record/status", dependencies=[Depends(auth)])
+async def record_status():
+    rec = recorder.current
+    if not rec:
+        return {"recording": False}
+    return {"recording": not rec.stopped.is_set(), "id": rec.id, "voice": rec.voice, "seconds": round(rec.seconds, 2), "device": rec.device, "error": rec.error}

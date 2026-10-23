@@ -118,27 +118,120 @@ def current_job(vid: str) -> Job | None:
     return j
 
 
-def start_import(vid: str, files: list[tuple[str, bytes]], separate: bool) -> Job:
+# ------------------------------------------------------------------ sources (pending trim)
+def _source(data: dict[str, Any], sid: str) -> dict[str, Any]:
+    for src in data.get("sources", []):
+        if src["id"] == sid:
+            return src
+    raise KeyError(sid)
+
+
+def work_wav(vid: str, sid: str) -> Path:
+    return ddir(vid) / "work" / f"{sid}_44k.wav"
+
+
+def add_source(vid: str, name: str, raw: bytes | None = None, path: Path | None = None, origin: str = "file") -> dict[str, Any]:
+    """Store an uploaded file (or a finished recording) and decode it for the trim editor."""
+    sid = uuid.uuid4().hex[:6]
+    src_dir = ddir(vid) / "sources"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    if raw is not None:
+        path = src_dir / f"{sid}{Path(name).suffix.lower() or '.bin'}"
+        path.write_bytes(raw)
+    assert path is not None
+    stereo = _decode_stereo(path)
+    if len(stereo) < 44100:
+        raise ValueError(f"“{name}”太短或没有音轨（至少 1 秒）。")
+    w44 = work_wav(vid, sid)
+    w44.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(w44), stereo, 44100, subtype="PCM_16")
+    src = {
+        "id": sid, "name": name, "origin": origin, "file": path.name,
+        "duration": round(len(stereo) / 44100, 2), "status": "pending",
+        "added_at": voices.now_iso(), "kept": None, "separated": None,
+    }
     with _lock:
-        j = jobs.get(vid)
-        if j and j.state == "running":
-            raise ValueError("这个声音已经有一个素材处理任务在运行，请等它完成。")
-        src_dir = ddir(vid) / "sources"
-        src_dir.mkdir(parents=True, exist_ok=True)
-        saved = []
-        for name, raw in files:
-            if not raw:
-                continue
-            sid = uuid.uuid4().hex[:6]
-            ext = Path(name).suffix.lower() or ".bin"
-            p = src_dir / f"{sid}{ext}"
-            p.write_bytes(raw)
-            saved.append((sid, name, p))
-        if not saved:
-            raise ValueError("没有收到有效的文件。")
+        data = load(vid)
+        data.setdefault("sources", []).append(src)
+        save(vid, data)
+    bus.publish("dataset_changed", voice=vid)
+    return src
+
+
+def peaks(vid: str, sid: str, per_second: int = 100) -> dict[str, Any]:
+    """Min/max envelope of the mono mix for drawing the waveform."""
+    x, sr = sf.read(str(work_wav(vid, sid)), dtype="float32", always_2d=True)
+    m = x.mean(axis=1)
+    per_second = max(10, min(400, per_second))
+    hop = max(1, sr // per_second)
+    n = len(m) // hop
+    blk = m[: n * hop].reshape(n, hop)
+    return {
+        "rate": sr / hop,
+        "duration": round(len(m) / sr, 3),
+        "min": np.round(blk.min(axis=1), 3).tolist(),
+        "max": np.round(blk.max(axis=1), 3).tolist(),
+    }
+
+
+def remove_source(vid: str, sid: str) -> None:
+    with _lock:
+        data = load(vid)
+        src = _source(data, sid)
+        data["sources"] = [s for s in data["sources"] if s["id"] != sid]
+        data["items"] = [i for i in data["items"] if i["source"] != sid]
+        save(vid, data)
+    for p in [work_wav(vid, sid), ddir(vid) / "sources" / src.get("file", "")]:
+        if p.is_file():
+            p.unlink()
+    for p in (ddir(vid) / "clips").glob(f"{sid}_*.wav"):
+        p.unlink()
+    bus.publish("dataset_changed", voice=vid)
+
+
+def normalize_ranges(ranges: list[list[float]], duration: float) -> list[tuple[float, float]]:
+    out = sorted((max(0.0, float(a)), min(duration, float(b))) for a, b in ranges if float(b) - float(a) > 0.05)
+    merged: list[list[float]] = []
+    for a, b in out:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return [(round(a, 3), round(b, 3)) for a, b in merged]
+
+
+def _busy(vid: str) -> None:
+    j = jobs.get(vid)
+    if j and j.state == "running":
+        raise ValueError("这个声音已经有一个素材处理任务在运行，请等它完成。")
+
+
+def start_process(vid: str, sid: str, ranges: list[list[float]] | None, separate: bool) -> Job:
+    with _lock:
+        _busy(vid)
+        src = _source(load(vid), sid)
+        kept = normalize_ranges(ranges or [[0, src["duration"]]], src["duration"])
+        if not kept:
+            raise ValueError("没有保留任何片段。")
         job = Job(voice=vid)
         jobs[vid] = job
-    threading.Thread(target=_run, args=(job, saved, separate), daemon=True, name=f"dataset-{vid}").start()
+    threading.Thread(target=_run, args=(job, [(sid, src["name"], kept)], separate), daemon=True, name=f"dataset-{vid}").start()
+    return job
+
+
+def start_import(vid: str, files: list[tuple[str, bytes]], separate: bool) -> Job:
+    """Import and process whole files in one step (API / scripts, no trimming)."""
+    _busy(vid)
+    todo = []
+    for name, raw in files:
+        if raw:
+            src = add_source(vid, name, raw=raw)
+            todo.append((src["id"], name, [(0.0, src["duration"])]))
+    if not todo:
+        raise ValueError("没有收到有效的文件。")
+    job = Job(voice=vid)
+    jobs[vid] = job
+    threading.Thread(target=_run, args=(job, todo, separate), daemon=True, name=f"dataset-{vid}").start()
     return job
 
 
@@ -154,20 +247,19 @@ class Cancelled(Exception):
     pass
 
 
-def _run(job: Job, saved: list[tuple[str, str, Path]], separate: bool) -> None:
+def _run(job: Job, todo: list[tuple[str, str, list[tuple[float, float]]]], separate: bool) -> None:
     vid = job.voice
     try:
-        n = len(saved)
-        for k, (sid, name, path) in enumerate(saved):
-            base = k / n
-            span = 1 / n
+        n = len(todo)
+        for k, (sid, name, kept) in enumerate(todo):
+            base, span = k / n, 1 / n
 
             def step(frac: float, stage: str, _b=base, _s=span, _name=name):
                 if job.cancel:
                     raise Cancelled()
                 job.update(stage=f"{_name}：{stage}", progress=_b + _s * frac)
 
-            _process_source(vid, sid, name, path, separate, step)
+            _process_source(vid, sid, kept, separate, step)
         job.state = "done"
         s = summary(vid)
         job.update(stage="完成", progress=1.0, message=f"共 {s['usable']} 段可用，合计 {s['seconds']:.0f} 秒")
@@ -180,51 +272,65 @@ def _run(job: Job, saved: list[tuple[str, str, Path]], separate: bool) -> None:
         job.update(stage="出错", message=str(e))
 
 
-def _process_source(vid: str, sid: str, name: str, path: Path, separate: bool, step) -> None:
+GAP = 1.0  # seconds of silence between kept ranges in the trimmed working file
+
+
+def _process_source(vid: str, sid: str, kept: list[tuple[float, float]], separate: bool, step) -> None:
     work = ddir(vid) / "work"
     clips = ddir(vid) / "clips"
-    work.mkdir(parents=True, exist_ok=True)
     clips.mkdir(parents=True, exist_ok=True)
 
-    step(0.02, "解码")
-    w44 = work / f"{sid}_44k.wav"
-    stereo = _decode_stereo(path)
-    if len(stereo) < 44100:
-        raise ValueError(f"“{name}”太短或没有音轨。")
-    sf.write(str(w44), stereo, 44100, subtype="PCM_16")
-    orig16 = audio_util.decode(w44, 16000)
+    step(0.02, "准备保留片段")
+    full, sr = sf.read(str(work_wav(vid, sid)), dtype="float32", always_2d=True)
+    pieces, offsets, pos = [], [], 0  # offsets: (start in trimmed file, start in original, length), seconds
+    for a, b in kept:
+        seg = full[int(a * sr) : int(b * sr)]
+        offsets.append((pos / sr, a, len(seg) / sr))
+        pieces += [seg, np.zeros((int(GAP * sr), full.shape[1]), np.float32)]
+        pos += len(seg) + int(GAP * sr)
+    tw = work / f"{sid}_trim.wav"
+    sf.write(str(tw), np.concatenate(pieces), sr, subtype="PCM_16")
+    orig16 = audio_util.decode(tw, 16000)
 
-    vocal_path, other_path = w44, None
+    vocal_path, other_path = tw, None
     if separate:
         step(0.08, "人声分离（BS-Roformer）")
-        vocal_path, other_path = _separate(w44, work)
+        vocal_path, other_path = _separate(tw, work)
     step(0.45, "切分句子")
     v16 = audio_util.decode(vocal_path, 16000)
     v32 = audio_util.decode(vocal_path, 32000)
     o16 = audio_util.decode(other_path, 16000) if other_path else None
     segs = _segments(v16)
 
+    def to_original(t: float) -> float:
+        """Map a time in the trimmed file back to the source; times inside a padding gap
+        snap to the nearer kept edge (end of this range or start of the next)."""
+        for k, (ts, os_, ln) in enumerate(offsets):
+            if ts <= t <= ts + ln:
+                return os_ + (t - ts)
+            if ts + ln < t < ts + ln + GAP:
+                if k + 1 < len(offsets) and t - (ts + ln) > GAP / 2:
+                    return offsets[k + 1][1]
+                return os_ + ln
+        return t
+
     data = load(vid)
     target = np.array(data["target"]["embedding"], dtype=np.float32) if data.get("target") else _voice_ref_embedding(vid)
-    if target is not None and not data.get("target"):
-        data["target"] = {"source": "ref", "embedding": target.tolist()}
-    data.setdefault("sources", []).append({"id": sid, "name": name, "separated": separate, "imported_at": voices.now_iso()})
     new_items = []
     for i, (a, b) in enumerate(segs):
         step(0.5 + 0.48 * i / max(1, len(segs)), f"转写与打分 {i + 1}/{len(segs)}")
         seg16 = v16[a:b]
         cid = f"{sid}_{i:04d}"
-        clip32 = v32[a * 2 : b * 2]
-        sf.write(str(clips / f"{cid}.wav"), np.clip(clip32, -1, 1), 32000, subtype="PCM_16")
+        sf.write(str(clips / f"{cid}.wav"), np.clip(v32[a * 2 : b * 2], -1, 1), 32000, subtype="PCM_16")
         r = asr.transcribe(seg16)
         q = _quality(seg16, orig16[a:b], o16[a:b] if o16 is not None else None)
         emb = _embed(seg16)
         sim = float(np.dot(emb, target)) if target is not None else None
-        item = {
+        new_items.append({
             "id": cid,
             "source": sid,
-            "start": round(a / 16000, 2),
-            "end": round(b / 16000, 2),
+            "start": round(to_original(a / 16000), 2),
+            "end": round(to_original(b / 16000), 2),
             "duration": round((b - a) / 16000, 2),
             "text": r["text"],
             "asr_text": r["text"],
@@ -235,15 +341,16 @@ def _process_source(vid: str, sid: str, name: str, path: Path, separate: bool, s
             "similarity": round(sim, 3) if sim is not None else None,
             "embedding": [round(float(v), 5) for v in emb],
             "deleted": False,
-        }
-        new_items.append(item)
+        })
     with _lock:
         cur = load(vid)
-        cur["items"].extend(new_items)
-        cur["sources"] = data["sources"]
-        if data.get("target") and not cur.get("target"):
-            cur["target"] = data["target"]
+        cur["items"] = [i for i in cur["items"] if i["source"] != sid] + new_items
+        src = _source(cur, sid)
+        src.update(status="processed", kept=[list(k) for k in kept], separated=separate, processed_at=voices.now_iso())
+        if target is not None and not cur.get("target"):
+            cur["target"] = {"source": "ref", "embedding": target.tolist()}
         save(vid, cur)
+    tw.unlink(missing_ok=True)
     bus.publish("dataset_changed", voice=vid)
 
 

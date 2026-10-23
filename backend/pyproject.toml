@@ -19,6 +19,7 @@ dependencies = [
     "sherpa-onnx>=1.12",
     "websockets>=12",
     "mcp>=2.0",
+    "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
 ]
 
 [project.scripts]

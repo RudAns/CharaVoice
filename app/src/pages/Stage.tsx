@@ -36,7 +36,7 @@ export function Stage() {
           });
         } else if (ev.type === "speak_start") {
           const name = voices.value.find((x) => x.id === ev.voice)?.name ?? ev.voice;
-          setLines((l) => [...l.slice(-40), { id: `v${ev.id}`, who: "voice", text: ev.text, meta: name }]);
+          setLines((l) => [...l.slice(-40), { id: `v${ev.id}-${ev.t}`, who: "voice", text: ev.text, meta: name }]);
         } else if (ev.type === "listen_error") notify(ev.message, "error");
       }),
     [],
