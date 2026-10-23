@@ -286,3 +286,30 @@ button.cut { border-color: #6b2c38; color: #fecaca; }
 .meter-peak { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; }
 button.rec-btn { background: linear-gradient(135deg, #ef4444, #e879b9); }
 .modal-back:has(.editor) { align-items: start; padding-top: 5vh; }
+
+/* training */
+.train { max-width: 1100px; }
+h3.first { margin-top: 0; }
+.checks { list-style: none; padding: 0; margin: 0 0 14px; display: flex; flex-direction: column; gap: 6px; }
+.checks li { display: grid; grid-template-columns: 22px 150px 1fr; gap: 10px; align-items: baseline; }
+.checks .mark { font-weight: 700; }
+.checks .ok .mark { color: var(--ok); }
+.checks .warn .mark { color: var(--warn); }
+.checks .bad .mark { color: var(--err); }
+.params { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; margin: 6px 0 16px; }
+.param { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: #c3c9d8; }
+.param input { width: 92px; }
+.stepper { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.step { display: flex; align-items: center; gap: 6px; padding: 5px 10px 5px 5px; border-radius: 20px; background: #141927; border: 1px solid #252c40; font-size: 12.5px; color: var(--muted); }
+.step i { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 11px; background: #222a3d; }
+.step.done { color: #a7f3d0; }
+.step.done i { background: #13423a; }
+.step.cur { color: #fff; border-color: #5b4bb0; background: #221f3d; }
+.step.cur i { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+.step.err { color: #fecaca; border-color: #6b2c38; }
+.progress.big { height: 10px; margin-bottom: 10px; }
+.train-line { display: flex; align-items: center; gap: 14px; }
+.samples { display: flex; flex-direction: column; gap: 8px; }
+.sample { display: grid; grid-template-columns: 80px 1fr; align-items: center; gap: 10px; }
+.sample audio { width: 100%; max-width: 520px; height: 34px; }
+.train-log { max-height: 340px; }

@@ -20,7 +20,12 @@ dependencies = [
     "websockets>=12",
     "mcp>=2.0",
     "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
+    "pyyaml>=6",
 ]
+
+[project.optional-dependencies]
+# AudioSeal watermark (CPU torch is enough; setup.py installs it from the PyTorch CPU index)
+watermark = ["torch>=2.1", "audioseal>=0.2"]
 
 [project.scripts]
 charavoice = "charavoice.cli:main"

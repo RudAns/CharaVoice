@@ -86,6 +86,8 @@ class Engine:
         self._synth_lock = asyncio.Lock()
         self._ready_event = asyncio.Event()
         self._client: httpx.AsyncClient | None = None
+        # set while a training run owns the GPU: synthesis is refused instead of auto-starting
+        self.hold: str | None = None
 
     # ---------- paths ----------
     @property
@@ -115,6 +117,7 @@ class Engine:
             "pid": self.proc.pid if self.proc and self.proc.poll() is None else None,
             "version": self.settings["version"],
             "loaded": list(self.loaded) if self.loaded else None,
+            "hold": self.hold,
         }
 
     def _set(self, state: str, message: str) -> None:
@@ -232,6 +235,8 @@ class Engine:
         await self.start()
 
     async def ensure_ready(self, wait: float = 90.0) -> None:
+        if self.hold:
+            raise EngineUnavailable(self.hold, "engine_busy")
         if self.state == READY and self.proc and self.proc.poll() is None:
             return
         if self.state in (STOPPED, ERROR):

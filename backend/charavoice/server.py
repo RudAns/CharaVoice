@@ -858,3 +858,64 @@ async def record_status():
     if not rec:
         return {"recording": False}
     return {"recording": not rec.stopped.is_set(), "id": rec.id, "voice": rec.voice, "seconds": round(rec.seconds, 2), "device": rec.device, "error": rec.error}
+
+
+# ---------------------------------------------------------------- training (M4)
+from . import training  # noqa: E402
+
+
+@app.get("/v1/voices/{vid}/train/precheck", dependencies=[Depends(auth)])
+async def train_precheck(vid: str):
+    _voice_or_404(vid)
+    return await asyncio.to_thread(training.precheck, vid)
+
+
+class TrainBody(BaseModel):
+    s2_epochs: int | None = None
+    s1_epochs: int | None = None
+    s2_batch: int | None = None
+    s1_batch: int | None = None
+    fresh: bool = Field(False, description="丢弃上次的训练进度，从头开始")
+
+
+@app.post("/v1/voices/{vid}/train/start", dependencies=[Depends(auth)])
+async def train_start(vid: str, body: TrainBody):
+    _voice_or_404(vid)
+    job = await asyncio.to_thread(training.start, vid, body.model_dump())
+    return job.public()
+
+
+@app.post("/v1/voices/{vid}/train/cancel", dependencies=[Depends(auth)])
+async def train_cancel(vid: str):
+    return {"cancelled": await asyncio.to_thread(training.cancel, vid)}
+
+
+@app.get("/v1/voices/{vid}/train", dependencies=[Depends(auth)])
+async def train_status(vid: str, log_lines: int = 200):
+    _voice_or_404(vid)
+    job = training.jobs.get(vid)
+    return {
+        "job": job.public() if job else None,
+        "state": training.load_state(vid),
+        "log": training.logs.get(vid, [])[-max(0, min(log_lines, 2000)) :],
+        "stages": [{"key": k, "label": l} for k, l in training.STAGES],
+        "samples": sorted(p.name for p in (training.tdir(vid) / "samples").glob("*.wav")) if (training.tdir(vid) / "samples").exists() else [],
+    }
+
+
+@app.get("/v1/voices/{vid}/train/samples/{name}", dependencies=[Depends(auth)])
+async def train_sample(vid: str, name: str):
+    p = training.sample_path(vid, name)
+    if not p:
+        raise ApiError(404, "没有这个试听文件", "not_found")
+    return FileResponse(p, media_type="audio/wav", headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/v1/audio/watermark/detect", dependencies=[Depends(auth)])
+async def watermark_detect(file: UploadFile = File(...)):
+    """Check an audio file for the AudioSeal watermark CharaVoice embeds in API output."""
+    from . import watermark
+
+    samples = await asyncio.to_thread(audio_util.decode, await file.read(), 16000)
+    r = await asyncio.to_thread(watermark.detect, samples, 16000)
+    return r | {"note": "probability > 0.5 表示检测到 AudioSeal 水印；charavoice=true 表示 16 位标识也匹配（有损压缩后标识可能读不出）"}

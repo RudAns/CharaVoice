@@ -60,10 +60,13 @@ def step_venv() -> Path:
         else:
             subprocess.check_call([sys.executable, "-m", "venv", str(ROOT / ".venv")])
     say("安装后端依赖")
+    torch_cpu = ["torch", "--index-url", "https://download.pytorch.org/whl/cpu"]
     if shutil.which("uv"):
-        subprocess.check_call(["uv", "pip", "install", "--python", str(py), "-e", str(ROOT / "backend")])
+        subprocess.check_call(["uv", "pip", "install", "--python", str(py), *torch_cpu])
+        subprocess.check_call(["uv", "pip", "install", "--python", str(py), "-e", f"{ROOT / 'backend'}[watermark]"])
     else:
-        subprocess.check_call([str(py), "-m", "pip", "install", "-e", str(ROOT / "backend")])
+        subprocess.check_call([str(py), "-m", "pip", "install", *torch_cpu])
+        subprocess.check_call([str(py), "-m", "pip", "install", "-e", f"{ROOT / 'backend'}[watermark]"])
     return py
 
 
@@ -111,6 +114,13 @@ def step_engine() -> None:
     tmp.rmdir()
 
 
+def step_speaker_model() -> None:
+    p = ROOT / "models" / "speaker" / "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+    if not p.exists():
+        say("下载声纹模型（3D-Speaker CAM++）")
+        download(f"https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/{p.name}", p)
+
+
 def step_frontend() -> None:
     pnpm = shutil.which("pnpm")
     if not pnpm:
@@ -127,6 +137,7 @@ def main() -> None:
     a = ap.parse_args()
     step_venv()
     step_asr()
+    step_speaker_model()
     if not a.skip_engine:
         step_engine()
     if not a.skip_frontend:
