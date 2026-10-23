@@ -56,6 +56,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "input_device": None,
         "vad_threshold": 0.5,
         "min_silence": 0.5,
+        # A conversational turn ends after this much silence (one-shot listen joins segments).
+        "turn_silence": 1.2,
         "min_speech": 0.25,
         "max_speech": 20.0,
         "pause_while_speaking": True,

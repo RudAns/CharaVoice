@@ -8,6 +8,7 @@ interface Line {
   who: "user" | "voice";
   text: string;
   meta?: string;
+  t?: number;
 }
 
 const STATE_LABEL: Record<string, string> = { idle: "待机", listening: "正在听", thinking: "正在合成", speaking: "正在说话" };
@@ -24,7 +25,15 @@ export function Stage() {
     () =>
       onEvent((ev) => {
         if (ev.type === "transcript" && !ev.empty) {
-          setLines((l) => [...l.slice(-40), { id: `u${ev.id}-${ev.t}`, who: "user", text: ev.text, meta: LANG_LABEL[ev.language] ?? ev.language }]);
+          setLines((l) => {
+            // Segments separated by a short pause belong to the same turn.
+            const last = l[l.length - 1];
+            if (last && last.who === "user" && last.t && ev.t - last.t < 2.5) {
+              const sep = /[　-ヿ一-鿿＀-￯]$/.test(last.text) ? "" : " ";
+              return [...l.slice(0, -1), { ...last, text: last.text + sep + ev.text, t: ev.t }];
+            }
+            return [...l.slice(-40), { id: `u${ev.id}-${ev.t}`, who: "user", text: ev.text, meta: LANG_LABEL[ev.language] ?? ev.language, t: ev.t }];
+          });
         } else if (ev.type === "speak_start") {
           const name = voices.value.find((x) => x.id === ev.voice)?.name ?? ev.voice;
           setLines((l) => [...l.slice(-40), { id: `v${ev.id}`, who: "voice", text: ev.text, meta: name }]);

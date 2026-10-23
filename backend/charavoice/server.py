@@ -504,27 +504,56 @@ async def listen_once(body: ListenBody):
 
 
 async def _listen_once(timeout: float, max_seconds: float) -> dict:
+    """One conversational turn: segments separated by short pauses are joined until the
+    user stays silent for listen.turn_silence seconds."""
     await asyncio.to_thread(player.wait_idle, 600)
+    turn_silence = float(config.load_settings()["listen"].get("turn_silence", 1.2))
     q = bus.subscribe()
     asr.listener.acquire()
     t0 = time.monotonic()
     started = False
+    in_speech = False
+    pending = 0  # segments ended but not yet transcribed
+    parts: list[dict] = []
+    last_end = 0.0
     try:
         while True:
-            limit = (t0 + max_seconds) if started else (t0 + timeout)
-            remaining = limit - time.monotonic()
-            if remaining <= 0:
-                return {"text": "", "language": "", "timeout": True, "heard_speech": started}
+            now = time.monotonic()
+            if parts and not in_speech and pending == 0 and now - last_end >= turn_silence:
+                break
+            if not started and now - t0 >= timeout:
+                return {"text": "", "language": "", "timeout": True, "heard_speech": False}
+            if now - t0 >= max_seconds:
+                break
             try:
-                ev = await asyncio.wait_for(q.get(), timeout=remaining)
+                ev = await asyncio.wait_for(q.get(), timeout=0.1)
             except asyncio.TimeoutError:
                 continue
             if ev["type"] == "speech_start":
-                started = True
+                started = in_speech = True
+            elif ev["type"] == "speech_end":
+                in_speech = False
+                if not ev.get("discarded"):
+                    pending += 1
+                last_end = time.monotonic()
             elif ev["type"] == "listen_error":
                 raise ApiError(500, ev["message"], "listen_failed")
-            elif ev["type"] == "transcript" and not ev.get("empty"):
-                return {"text": ev["text"], "language": ev["language"], "emotion": ev.get("emotion", ""), "duration": ev.get("duration"), "timeout": False}
+            elif ev["type"] == "transcript":
+                pending = max(0, pending - 1)
+                if not ev.get("empty"):
+                    parts.append(ev)
+        if not parts:
+            return {"text": "", "language": "", "timeout": True, "heard_speech": started}
+        lang = parts[0]["language"]
+        joiner = "" if lang in ("zh", "ja", "yue") else " "
+        return {
+            "text": joiner.join(p["text"] for p in parts).strip(),
+            "language": lang,
+            "emotion": parts[0].get("emotion", ""),
+            "duration": round(sum(p.get("duration") or 0 for p in parts), 2),
+            "segments": len(parts),
+            "timeout": False,
+        }
     finally:
         asr.listener.release()
         bus.unsubscribe(q)

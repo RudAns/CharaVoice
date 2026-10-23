@@ -26,6 +26,9 @@ from .player import level_of, player
 log = logging.getLogger("charavoice.asr")
 SR = 16000
 _TAG = re.compile(r"<\|([^|]*)\|>")
+# SenseVoice sometimes emits spaces between Japanese/Chinese words; they are not part of the text.
+_CJK = r"぀-ヿ㐀-䶿一-鿿＀-￯　-〿"
+_CJK_GAP = re.compile(rf"(?<=[{_CJK}])\s+(?=[{_CJK}])")
 _rec_lock = threading.Lock()
 _recognizers: dict[tuple, object] = {}
 
@@ -80,7 +83,7 @@ def transcribe(samples: np.ndarray, language: str = "") -> dict:
     rec.decode_stream(stream)
     r = stream.result
     return {
-        "text": r.text.strip(),
+        "text": _CJK_GAP.sub("", r.text.strip()),
         "language": _strip(getattr(r, "lang", "")) or (language if language not in ("", "auto") else ""),
         "emotion": _strip(getattr(r, "emotion", "")),
         "event": _strip(getattr(r, "event", "")),
