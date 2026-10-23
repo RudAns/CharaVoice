@@ -171,6 +171,37 @@ fn restart_backend(app: AppHandle) -> Result<(), String> {
     spawn_backend(&app)
 }
 
+/// Open or close the frameless, always-on-top companion window (ring + avatar only).
+#[tauri::command]
+async fn toggle_companion(app: AppHandle) -> Result<bool, String> {
+    if let Some(w) = app.get_webview_window("companion") {
+        w.close().map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+    let w = tauri::WebviewWindowBuilder::new(&app, "companion", tauri::WebviewUrl::App("index.html#companion".into()))
+        .title("CharaVoice")
+        .inner_size(240.0, 280.0)
+        .min_inner_size(160.0, 190.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    if let Ok(Some(m)) = w.primary_monitor() {
+        let area = m.work_area();
+        let size = w.outer_size().map_err(|e| e.to_string())?;
+        let margin = (24.0 * m.scale_factor()) as i32;
+        let x = area.position.x + area.size.width as i32 - size.width as i32 - margin;
+        let y = area.position.y + area.size.height as i32 - size.height as i32 - margin;
+        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+    let _ = app.emit("companion", true);
+    Ok(true)
+}
+
 #[tauri::command]
 fn home_path() -> String {
     home_dir().canonicalize().unwrap_or_else(|_| home_dir()).display().to_string()
@@ -188,7 +219,12 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Backend::default())
-        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path])
+        .on_window_event(|w, e| {
+            if w.label() == "companion" && matches!(e, tauri::WindowEvent::Destroyed) {
+                let _ = w.app_handle().emit("companion", false);
+            }
+        })
+        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion])
         .build(tauri::generate_context!())
         .expect("error while building CharaVoice")
         .run(|app, event| {

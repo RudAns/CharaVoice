@@ -1,4 +1,6 @@
-import { useEffect } from "preact/hooks";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useState } from "preact/hooks";
 import { conn, connError, connect, engine, onEvent } from "./api";
 import { Ring } from "./components/Ring";
 import { Integration } from "./pages/Integration";
@@ -15,8 +17,13 @@ const NAV = [
 ];
 
 export default function App() {
+  const [companion, setCompanion] = useState(false);
   useEffect(() => {
     connect();
+    const un = listen<boolean>("companion", (e) => setCompanion(e.payload));
+    return () => {
+      un.then((f) => f());
+    };
   }, []);
   useEffect(() => {
     if (!conn.value) return;
@@ -55,6 +62,18 @@ export default function App() {
           </button>
         ))}
         <div class="grow" />
+        <button
+          class={`nav ${companion ? "on" : ""}`}
+          title="在屏幕角落显示一个置顶的小窗，只有角色和圆环"
+          onClick={async () => setCompanion(await invoke<boolean>("toggle_companion"))}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="13" rx="2" />
+            <circle cx="16" cy="12.5" r="2.5" />
+            <path d="M8 21h8" />
+          </svg>
+          桌面伴随
+        </button>
         <div class={`engine-pill ${eng?.state ?? "stopped"}`} title={eng?.message}>
           <span class="dot" />
           引擎 {eng?.version ?? ""} · {eng?.state === "ready" ? "就绪" : eng?.state === "starting" ? "启动中" : eng?.state === "error" ? "出错" : "未启动"}
