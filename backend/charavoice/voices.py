@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config
+from .events import bus
 
 CONSENT_NOTICE = "请告知被模仿的人并取得其单独同意。"
 CONSENT_KINDS = {"self": "本人声音", "authorized": "已获授权的声音"}
@@ -59,6 +60,7 @@ def _write(v: dict[str, Any]) -> None:
     tmp = d / "voice.json.tmp"
     tmp.write_text(json.dumps(v, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(d / "voice.json")
+    bus.publish("voices_changed", id=v["id"])
 
 
 def get(vid: str) -> dict[str, Any]:
@@ -186,6 +188,7 @@ def delete(vid: str) -> Path:
     trash.mkdir(parents=True, exist_ok=True)
     dst = trash / f"{vid}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     shutil.move(str(d), str(dst))
+    bus.publish("voices_changed", id=vid)
     return dst
 
 

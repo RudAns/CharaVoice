@@ -99,7 +99,7 @@ export function Stage() {
           </div>
         </header>
 
-        <Showcase voice={v} />
+        <Showcase voice={v} onUpload={() => go("voices")} />
 
         {!engineOk && (
           <div class={`engine-banner ${eng?.state === "error" ? "error" : ""}`}>

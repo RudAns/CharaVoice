@@ -22,7 +22,7 @@ export default function App() {
     if (!conn.value) return;
     refreshVoices().catch(() => {});
     return onEvent((ev) => {
-      if (ev.type === "hello") refreshVoices().catch(() => {});
+      if (ev.type === "hello" || ev.type === "voices_changed") refreshVoices().catch(() => {});
     });
   }, [conn.value]);
 

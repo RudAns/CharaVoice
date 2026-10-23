@@ -84,21 +84,33 @@ main { flex: 1; min-width: 0; overflow: auto; background: radial-gradient(1200px
 .splash-ring .ring { width: 100%; height: 100%; }
 .splash h1 { font-size: 26px; }
 
-/* showcase */
+/* showcase: ring radius R = 34% of the box (see Ring.tsx) */
 .showcase { position: relative; width: 100%; aspect-ratio: 1 / 1; max-width: 440px; margin: 0 auto; }
 .showcase.compact { max-width: 200px; }
 .showcase .ring { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.showcase .avatar { position: absolute; inset: 0; display: grid; place-items: center; }
-.showcase .avatar > img, .showcase .avatar > video { grid-area: 1 / 1; opacity: 0; transition: opacity .35s ease; object-fit: cover; }
+.showcase .avatar { position: absolute; display: grid; }
+.showcase .avatar > img, .showcase .avatar > video { grid-area: 1 / 1; width: 100%; height: 100%; opacity: 0; transition: opacity .35s ease; }
 .showcase .avatar > .on { opacity: 1; }
-.mode-circle .avatar > img, .mode-circle .avatar > video { width: 60%; height: 60%; border-radius: 50%; }
-.mode-circle .avatar { -webkit-mask: radial-gradient(circle at center, #000 29.6%, transparent 30.4%); mask: radial-gradient(circle at center, #000 29.6%, transparent 30.4%); }
-.mode-free .avatar > img, .mode-free .avatar > video { width: 86%; height: 86%; object-fit: contain; filter: drop-shadow(0 10px 30px rgba(0,0,0,.45)); }
-.avatar-empty {
-  width: 46%; height: 46%; border-radius: 50%; display: grid; place-items: center; font-size: 64px; font-weight: 600;
-  color: rgba(255,255,255,.85); background: radial-gradient(circle at 35% 30%, #2d3550, #151a28); box-shadow: inset 0 0 40px rgba(0,0,0,.4);
+/* circle: disc of 0.86 R, cover-cropped */
+.mode-circle .avatar { inset: calc(50% - 29.2%); border-radius: 50%; overflow: hidden; background: #141927; }
+.mode-circle .avatar > img, .mode-circle .avatar > video { object-fit: cover; }
+/* free: sprite inside a 1.88 R square, scaled by height, bottom-aligned, soft circular mask at 0.94 R */
+.mode-free .avatar {
+  inset: calc(50% - 32%);
+  -webkit-mask: radial-gradient(circle closest-side, #000 92%, transparent 100%);
+  mask: radial-gradient(circle closest-side, #000 92%, transparent 100%);
 }
-.compact .avatar-empty { font-size: 34px; }
+.mode-free .avatar > img, .mode-free .avatar > video { object-fit: contain; object-position: 50% 100%; }
+.avatar-placeholder {
+  position: absolute; inset: calc(50% - 29.2%); border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, rgba(46, 54, 82, .55), rgba(18, 22, 34, .55));
+  border: 1px solid rgba(150, 170, 230, .12);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6%;
+}
+.avatar-placeholder svg { width: 38%; height: 38%; fill: none; stroke: rgba(160, 178, 235, .38); stroke-width: 1.6; stroke-linecap: round; }
+.avatar-placeholder .link { background: none; border: none; padding: 2px 6px; font-size: 12.5px; color: rgba(190, 200, 240, .7); }
+.avatar-placeholder .link:hover { color: #fff; text-decoration: underline; background: none; }
+.compact .avatar-placeholder svg { width: 44%; height: 44%; }
 @media (prefers-reduced-motion: reduce) { .showcase .avatar > img, .showcase .avatar > video { transition: none; } }
 
 /* stage */
