@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Orb look lab</title>
+    <style>
+      body { margin: 0; padding: 24px; font: 14px "Segoe UI", "Microsoft YaHei UI", sans-serif; color: #cfd5e4; background: #0e1016; }
+      body.light { background: #f3f4f8; color: #333; }
+      .row { display: grid; grid-template-columns: 120px repeat(4, 300px); gap: 12px; align-items: center; margin-bottom: 12px; }
+      .cell { position: relative; width: 300px; height: 300px; border-radius: 14px; background: radial-gradient(800px 500px at 40% 20%, #171c2b, #0e1016); }
+      body.light .cell { background: #ffffff; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+      .cell canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+      .head { text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div id="lab"></div>
+    <script type="module" src="./orbLab.ts"></script>
+  </body>
+</html>

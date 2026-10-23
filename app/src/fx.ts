@@ -4,10 +4,11 @@ import { onEvent, presence, type Presence } from "./api";
 
 export type RGB = [number, number, number];
 export const PALETTES: Record<Presence, RGB[]> = {
-  idle: [[150, 178, 255], [196, 208, 255], [124, 146, 230]],
-  listening: [[45, 212, 191], [74, 222, 128], [56, 189, 248]],
-  speaking: [[167, 139, 250], [244, 114, 182], [129, 140, 248]],
-  thinking: [[251, 191, 36], [96, 165, 250], [244, 114, 182]],
+  // soft, low-saturation triads; each state reads clearly but none is harsh
+  idle: [[160, 180, 255], [196, 182, 255], [150, 214, 255]],
+  listening: [[112, 228, 210], [128, 204, 255], [170, 240, 205]],
+  thinking: [[255, 206, 140], [255, 168, 150], [206, 180, 255]],
+  speaking: [[196, 168, 255], [255, 160, 214], [150, 190, 255]],
 };
 
 export interface FxState {
