@@ -275,6 +275,7 @@ def _run(job: TrainJob) -> None:
         restart_engine = False
         job.samples = on_loop(_samples(vid))
         job.status = "done"
+        job.stage_progress = 1.0
         job.message = "训练完成，已切换到新权重。"
         _emit(job)
     except Cancelled:
@@ -480,10 +481,13 @@ def _train_s1(job: TrainJob, version: str, exp: Path) -> Path:
     total = p["s1_epochs"]
 
     def parse(line: str):
-        m = re.search(r"Epoch (\d+):\s+(\d+)%", line)
-        if m:
-            ep, pct = int(m.group(1)), int(m.group(2))
-            job.stage_progress = min(1.0, (ep + pct / 100) / total)
+        # Lightning's rich bar: "Epoch 3/14 ---- 12/39 ..." (older tqdm bar: "Epoch 3:  30%")
+        m = re.search(r"Epoch (\d+)/\d+\D+?(\d+)/(\d+)", line)
+        t = re.search(r"Epoch (\d+):\s+(\d+)%", line)
+        if m or t:
+            ep = int((m or t).group(1))
+            frac = int(m.group(2)) / max(1, int(m.group(3))) if m else int(t.group(2)) / 100
+            job.stage_progress = min(1.0, (ep + frac) / total)
             job.detail = f"第 {ep + 1} / {total} 轮"
             _emit(job)
 
