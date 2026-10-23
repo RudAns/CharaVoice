@@ -5,18 +5,9 @@
 //   thinking  rotating light sweep while the engine is synthesizing
 // With prefers-reduced-motion the contour stays still and only colour/opacity change.
 import { useEffect, useRef } from "preact/hooks";
-import { onEvent, presence, type Presence } from "../api";
-
-type RGB = [number, number, number];
-const PALETTES: Record<Presence, RGB[]> = {
-  idle: [[150, 178, 255], [196, 208, 255], [124, 146, 230]],
-  listening: [[45, 212, 191], [74, 222, 128], [56, 189, 248]],
-  speaking: [[167, 139, 250], [244, 114, 182], [129, 140, 248]],
-  thinking: [[251, 191, 36], [96, 165, 250], [244, 114, 182]],
-};
+import { tick, type RGB } from "../fx";
 
 const rgba = (c: RGB, a: number) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
-const mix = (a: RGB, b: RGB, k: number): RGB => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 
 export const RING_RADIUS = 0.34; // fraction of the smaller side
 
@@ -26,8 +17,7 @@ export function Ring({ class: cls }: { class?: string }) {
   useEffect(() => {
     const cv = canvas.current!;
     const ctx = cv.getContext("2d")!;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let w = 0, h = 0, dpr = 1;
+    let w = 0, h = 0, dpr = 1, raf = 0;
     const ro = new ResizeObserver(() => {
       dpr = window.devicePixelRatio || 1;
       w = cv.clientWidth;
@@ -37,40 +27,11 @@ export function Ring({ class: cls }: { class?: string }) {
     });
     ro.observe(cv);
 
-    // level targets per source; speak levels are applied after the device latency
-    const target = { mic: 0, speak: 0 };
-    const off = onEvent((ev) => {
-      if (ev.type !== "level") return;
-      if (ev.source === "speak") {
-        const v = ev.level as number;
-        setTimeout(() => (target.speak = v), Math.min(300, (ev.delay ?? 0) * 1000));
-      } else if (ev.source === "mic") target.mic = ev.level;
-    });
-
-    let pal: RGB[] = PALETTES[presence.value].map((c) => [...c] as RGB);
-    let level = 0, energy = 0, sweep = 0, t = 0, last = performance.now(), raf = 0;
-
     const frame = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      const still = reduce.matches;
-      if (!still) t += dt;
-      const st = presence.value;
-
-      const k = 1 - Math.exp(-dt * 5);
-      pal = pal.map((c, i) => mix(c, PALETTES[st][i], k));
-
-      const want = st === "speaking" ? target.speak : st === "listening" ? target.mic : 0;
-      level += (want - level) * (1 - Math.exp(-dt * (want > level ? 22 : 7)));
-      const wantEnergy = st === "idle" ? 0.15 : st === "thinking" ? 0.45 : 0.35 + level * 0.65;
-      energy += (wantEnergy - energy) * k;
-      sweep += (st === "thinking" ? 1 : -1) * dt * 3;
-      sweep = Math.max(0, Math.min(1, sweep));
-
+      const { pal, level, energy, sweep, breathe, t, still, state: st } = tick(now);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       const cx = w / 2, cy = h / 2;
-      const breathe = st === "idle" && !still ? Math.sin((t * Math.PI * 2) / 4.5) : 0;
       const R = Math.min(w, h) * RING_RADIUS * (1 + 0.018 * breathe);
 
       // soft halo
@@ -115,8 +76,7 @@ export function Ring({ class: cls }: { class?: string }) {
       if (sweep > 0.01) {
         const rot = still ? 0 : t * 2.6;
         for (let j = 0; j < 2; j++) {
-          const start = rot + j * Math.PI;
-          const cg = ctx.createConicGradient(start - 1.6, cx, cy);
+          const cg = ctx.createConicGradient(rot + j * Math.PI - 1.6, cx, cy);
           cg.addColorStop(0, rgba(pal[j], 0));
           cg.addColorStop(0.25, rgba(pal[j], 0.95 * sweep));
           cg.addColorStop(0.26, rgba(pal[j], 0));
@@ -140,7 +100,6 @@ export function Ring({ class: cls }: { class?: string }) {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      off();
     };
   }, []);
 

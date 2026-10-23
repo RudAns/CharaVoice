@@ -21,6 +21,8 @@ use tauri_plugin_shell::ShellExt;
 struct Backend {
     child: Mutex<Option<CommandChild>>,
     log: Mutex<Vec<String>>,
+    /// Serializes backend_info so two windows never spawn two backends.
+    starting: tokio::sync::Mutex<()>,
 }
 
 #[derive(Serialize, Clone)]
@@ -131,6 +133,8 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
 /// Return connection details once the backend answers /health; start it if needed.
 #[tauri::command]
 async fn backend_info(app: AppHandle) -> Result<BackendInfo, String> {
+    let state = app.state::<Backend>();
+    let _guard = state.starting.lock().await;
     let home = home_dir();
     if let Some(info) = read_runtime(&home) {
         if healthy(&info.base_url) {
@@ -179,7 +183,7 @@ async fn toggle_companion(app: AppHandle) -> Result<bool, String> {
         return Ok(false);
     }
     let w = tauri::WebviewWindowBuilder::new(&app, "companion", tauri::WebviewUrl::App("index.html#companion".into()))
-        .title("CharaVoice")
+        .title("CharaVoice 伴随")
         .inner_size(240.0, 280.0)
         .min_inner_size(160.0, 190.0)
         .decorations(false)

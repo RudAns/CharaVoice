@@ -37,6 +37,12 @@ def cmd_serve(a) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     s = config.load_settings()["server"]
     port = a.port or int(s["port"])
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            sys.stderr.write(f"错误：端口 {port} 已被占用（可能 CharaVoice 已经在运行）。\n")
+            return EXIT_BACKEND_DOWN
     from . import server
 
     server.RUNTIME.update(config.write_runtime(port, os.getpid()))

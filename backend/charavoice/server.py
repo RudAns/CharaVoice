@@ -661,3 +661,103 @@ async def ui_listen(on: bool = True):
 
 
 _ui_holds = False
+
+
+# ---------------------------------------------------------------- dataset (M3)
+from . import dataset  # noqa: E402
+
+
+def _voice_or_404(vid: str) -> dict:
+    try:
+        return voices.get(vid)
+    except KeyError:
+        raise ApiError(404, f"找不到声音 {vid}", "not_found")
+
+
+@app.get("/v1/voices/{vid}/dataset", dependencies=[Depends(auth)])
+async def dataset_get(vid: str):
+    _voice_or_404(vid)
+    data = await asyncio.to_thread(dataset.load, vid)
+    job = dataset.current_job(vid)
+    return {
+        "items": dataset.public_items(data),
+        "summary": dataset.summary(vid, data),
+        "target": {k: v for k, v in (data.get("target") or {}).items() if k != "embedding"} or None,
+        "sources": data.get("sources", []),
+        "job": job.public() if job else None,
+    }
+
+
+@app.post("/v1/voices/{vid}/dataset/import", dependencies=[Depends(auth)])
+async def dataset_import(vid: str, files: list[UploadFile] = File(...), separate: bool = Form(True)):
+    _voice_or_404(vid)
+    payload = [(f.filename or "upload", await f.read()) for f in files]
+    job = dataset.start_import(vid, payload, separate)
+    return job.public()
+
+
+@app.post("/v1/voices/{vid}/dataset/cancel", dependencies=[Depends(auth)])
+async def dataset_cancel(vid: str):
+    return {"cancelled": dataset.cancel(vid)}
+
+
+class ItemPatch(BaseModel):
+    text: str | None = None
+    lang: str | None = None
+    deleted: bool | None = None
+
+
+@app.patch("/v1/voices/{vid}/dataset/items/{item_id}", dependencies=[Depends(auth)])
+async def dataset_item(vid: str, item_id: str, body: ItemPatch):
+    try:
+        it = await asyncio.to_thread(dataset.edit_item, vid, item_id, body.model_dump())
+    except KeyError:
+        raise ApiError(404, "找不到这个片段", "not_found")
+    return {k: v for k, v in it.items() if k != "embedding"} | {"summary": dataset.summary(vid)}
+
+
+@app.get("/v1/voices/{vid}/dataset/items/{item_id}/audio", dependencies=[Depends(auth)])
+async def dataset_item_audio(vid: str, item_id: str):
+    p = dataset.ddir(vid) / "clips" / f"{item_id}.wav"
+    if not p.exists() or not p.resolve().is_relative_to(dataset.ddir(vid).resolve()):
+        raise ApiError(404, "找不到音频", "not_found")
+    return FileResponse(p, media_type="audio/wav")
+
+
+class BulkBody(BaseModel):
+    action: str = Field(description="delete | restore | filter")
+    ids: list[str] | None = None
+    min_score: int | None = None
+    min_similarity: float | None = None
+
+
+@app.post("/v1/voices/{vid}/dataset/bulk", dependencies=[Depends(auth)])
+async def dataset_bulk(vid: str, body: BulkBody):
+    if body.action not in ("delete", "restore", "filter"):
+        raise ApiError(400, "action 只能是 delete / restore / filter")
+    return await asyncio.to_thread(dataset.bulk, vid, body.ids, body.action, body.min_score, body.min_similarity)
+
+
+class TargetBody(BaseModel):
+    item_ids: list[str] | None = None
+    use_ref: bool = False
+
+
+@app.post("/v1/voices/{vid}/dataset/target", dependencies=[Depends(auth)])
+async def dataset_target(vid: str, body: TargetBody):
+    _voice_or_404(vid)
+    data = await asyncio.to_thread(dataset.set_target, vid, body.item_ids, body.use_ref)
+    return {"summary": dataset.summary(vid, data)}
+
+
+@app.post("/v1/voices/{vid}/dataset/export", dependencies=[Depends(auth)])
+async def dataset_export(vid: str):
+    _voice_or_404(vid)
+    return await asyncio.to_thread(dataset.export, vid)
+
+
+@app.delete("/v1/voices/{vid}/dataset", dependencies=[Depends(auth)])
+async def dataset_clear(vid: str):
+    _voice_or_404(vid)
+    await asyncio.to_thread(dataset.clear, vid)
+    return {"cleared": True}

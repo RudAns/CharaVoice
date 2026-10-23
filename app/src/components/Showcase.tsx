@@ -3,9 +3,10 @@
 //   circle mode  avatar fills a disc of 0.86 R, object-fit: cover
 //   free mode    transparent sprite scaled by height, bottom-aligned, masked to 0.94 R
 // Everything stays inside the ring; with no avatar (or a file that fails to load)
-// a quiet placeholder is shown instead.
+// the glowing orb is shown instead.
 import { useState } from "preact/hooks";
 import { presence, url, type AvatarSlot, type Voice } from "../api";
+import { Orb } from "./Orb";
 import { Ring } from "./Ring";
 
 const SLOT_FOR: Record<string, AvatarSlot> = { speaking: "speaking", listening: "listening", idle: "idle", thinking: "idle" };
@@ -35,18 +36,11 @@ export function Showcase({ voice, compact = false, onUpload }: { voice?: Voice; 
 
   return (
     <div class={`showcase mode-${mode} state-${st} ${compact ? "compact" : ""}`}>
-      {!active && (
-        <div class="avatar-placeholder">
-          <svg viewBox="0 0 64 64" aria-hidden="true">
-            <circle cx="32" cy="24" r="10" />
-            <path d="M14 52c2.5-9.5 9.5-15 18-15s15.5 5.5 18 15" />
-          </svg>
-          {!compact && onUpload && (
-            <button class="link" onClick={onUpload}>
-              上传角色形象
-            </button>
-          )}
-        </div>
+      {!active && <Orb class="orb" />}
+      {!active && !compact && onUpload && (
+        <button class="link upload-link" onClick={onUpload}>
+          上传角色形象
+        </button>
       )}
       {active && (
         <div class="avatar">

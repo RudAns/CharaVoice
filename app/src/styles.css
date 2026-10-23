@@ -101,16 +101,12 @@ main { flex: 1; min-width: 0; overflow: auto; background: radial-gradient(1200px
   mask: radial-gradient(circle closest-side, #000 92%, transparent 100%);
 }
 .mode-free .avatar > img, .mode-free .avatar > video { object-fit: contain; object-position: 50% 100%; }
-.avatar-placeholder {
-  position: absolute; inset: calc(50% - 29.2%); border-radius: 50%;
-  background: radial-gradient(circle at 50% 35%, rgba(46, 54, 82, .55), rgba(18, 22, 34, .55));
-  border: 1px solid rgba(150, 170, 230, .12);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6%;
-}
-.avatar-placeholder svg { width: 38%; height: 38%; fill: none; stroke: rgba(160, 178, 235, .38); stroke-width: 1.6; stroke-linecap: round; }
-.avatar-placeholder .link { background: none; border: none; padding: 2px 6px; font-size: 12.5px; color: rgba(190, 200, 240, .7); }
-.avatar-placeholder .link:hover { color: #fff; text-decoration: underline; background: none; }
-.compact .avatar-placeholder svg { width: 44%; height: 44%; }
+.showcase .orb { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.orb-fallback { border-radius: 50%; inset: calc(50% - 27.2%) !important; width: auto !important; height: auto !important;
+  background: radial-gradient(circle at 38% 34%, rgba(220, 228, 255, .5), rgba(124, 146, 230, .35) 45%, rgba(40, 48, 80, .2) 75%); }
+.upload-link { position: absolute; left: 50%; bottom: 3%; transform: translateX(-50%); background: none; border: none;
+  padding: 2px 8px; font-size: 12.5px; color: rgba(190, 200, 240, .55); }
+.upload-link:hover { color: #fff; background: none; text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) { .showcase .avatar > img, .showcase .avatar > video { transition: none; } }
 
 /* stage */
