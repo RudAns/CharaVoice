@@ -10,12 +10,22 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sys
 import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(os.environ.get("CHARAVOICE_HOME") or Path(__file__).resolve().parents[2])
+APP_ID = "io.github.rudans.charavoice"  # Tauri identifier; the installed app keeps its data in %LOCALAPPDATA%\<APP_ID>
+
+
+def _default_root() -> Path:
+    if getattr(sys, "frozen", False):  # packaged backend: same folder the desktop app uses
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / APP_ID
+    return Path(__file__).resolve().parents[2]  # source checkout: the repository folder
+
+
+ROOT = Path(os.environ.get("CHARAVOICE_HOME") or _default_root())
 DATA_DIR = ROOT / "data"
 VOICES_DIR = DATA_DIR / "voices"
 LOG_DIR = DATA_DIR / "logs"

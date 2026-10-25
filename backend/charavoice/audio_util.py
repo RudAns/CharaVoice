@@ -15,17 +15,40 @@ from .procutil import CREATE_FLAGS
 
 
 def ffmpeg_exe() -> str:
+    found = ffmpeg_or_none()
+    if not found:
+        raise RuntimeError("这个格式需要 ffmpeg：请在“模型”页安装 GPT-SoVITS（自带 ffmpeg），或把 ffmpeg 加入 PATH。WAV / FLAC / OGG / MP3 不需要。")
+    return found
+
+
+def ffmpeg_or_none() -> str | None:
     bundled = config.resolve(config.load_settings()["engine"]["dir"]) / "runtime" / "ffmpeg.exe"
     if bundled.exists():
         return str(bundled)
-    found = shutil.which("ffmpeg")
-    if not found:
-        raise RuntimeError("没有找到 ffmpeg，请安装 ffmpeg 或先安装 GPT-SoVITS 引擎（自带 ffmpeg）")
-    return found
+    return shutil.which("ffmpeg")
+
+
+def _decode_sf(src: str | Path | bytes, sr: int) -> np.ndarray:
+    """ffmpeg-free path for formats libsndfile reads (WAV, FLAC, OGG/Opus, MP3)."""
+    from scipy.signal import resample_poly
+
+    x, osr = sf.read(io.BytesIO(src) if isinstance(src, bytes) else str(src), dtype="float32", always_2d=True)
+    x = x.mean(axis=1)
+    if osr != sr:
+        from math import gcd
+
+        g = gcd(osr, sr)
+        x = resample_poly(x, sr // g, osr // g).astype(np.float32)
+    return x
 
 
 def decode(src: str | Path | bytes, sr: int = 16000) -> np.ndarray:
     """Decode any audio/video file or bytes to mono float32 at `sr`."""
+    if not ffmpeg_or_none():
+        try:
+            return _decode_sf(src, sr)
+        except Exception as e:
+            raise ValueError(f"无法解码音频（未安装 ffmpeg，只支持 WAV / FLAC / OGG / MP3）：{e}") from None
     if isinstance(src, (str, Path)):
         cmd = [ffmpeg_exe(), "-nostdin", "-v", "error", "-i", str(src)]
         data = None
@@ -52,6 +75,10 @@ def encode(pcm16: np.ndarray, sr: int, fmt: str) -> tuple[bytes, str]:
     fmt = (fmt or "wav").lower()
     if fmt == "pcm":
         return pcm16.astype("<i2").tobytes(), "audio/pcm"
+    if fmt == "mp3" and not ffmpeg_or_none():
+        buf = io.BytesIO()
+        sf.write(buf, pcm16, sr, format="MP3")
+        return buf.getvalue(), "audio/mpeg"
     if fmt in ("wav", "flac"):
         buf = io.BytesIO()
         sf.write(buf, pcm16, sr, format=fmt.upper(), subtype="PCM_16")

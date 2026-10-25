@@ -38,3 +38,5 @@ node_modules/
 !.env.example
 .DS_Store
 Thumbs.db
+/app/src-tauri/resources/backend/
+/build/

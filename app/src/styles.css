@@ -376,3 +376,19 @@ button.ghost { background: transparent; border-color: transparent; color: var(--
 .nat-row span { display: flex; flex-direction: column; gap: 2px; }
 .nat-row small { font-size: 12px; }
 .breath-line { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+
+.assets { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; }
+.asset-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.asset-head .tag { margin-left: 8px; font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--panel2); color: var(--accent); border: 1px solid var(--line); }
+.asset-head .muted { margin-top: 4px; font-size: 13px; }
+.asset-side { display: flex; align-items: center; gap: 10px; flex: none; }
+.asset .state { font-size: 12.5px; color: var(--muted); }
+.asset .state.ok { color: var(--ok); }
+.asset-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+.asset-meta a { color: var(--accent); }
+.asset-job { margin-top: 10px; font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; }
+.asset-job.error span { color: var(--err); }
+.asset-job .bar { height: 6px; border-radius: 3px; background: var(--bg2); overflow: hidden; }
+.asset-job .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
+.setup-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 24px 0; padding: 10px 14px; border-radius: 10px;
+  background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .35); color: #fde68a; font-size: 13.5px; }

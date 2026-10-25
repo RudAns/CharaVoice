@@ -5,6 +5,8 @@ import { api, type Voice } from "./api";
 export const voices = signal<Voice[]>([]);
 export const selectedId = signal<string>(safeGet("cv.voice") ?? "");
 export const page = signal<string>(safeGet("cv.page") ?? "stage");
+/** Required models/engines that are not installed yet (filled from /v1/assets). */
+export const missingAssets = signal<string[]>([]);
 export const toast = signal<{ text: string; kind: "info" | "error" } | null>(null);
 
 export const selected = computed<Voice | undefined>(

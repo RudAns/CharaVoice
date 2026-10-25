@@ -72,7 +72,7 @@ def _recognizer(language: str = ""):
 def _require(files: list[Path], name: str) -> None:
     missing = [f.name for f in files if not f.exists()]
     if missing:
-        raise RuntimeError(f"缺少 {name} 模型文件：{', '.join(missing)}（请运行 setup.bat 下载听写模型）")
+        raise RuntimeError(f"缺少 {name} 模型文件：{', '.join(missing)}（请在“模型”页安装听写模型）")
 
 
 def transcribe(samples: np.ndarray, language: str = "") -> dict:

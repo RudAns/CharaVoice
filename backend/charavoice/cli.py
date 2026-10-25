@@ -143,6 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="charavoice", description="CharaVoice：本地角色声音（说 / 听）")
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    s = sub.add_parser("mcp", help="以 stdio 方式运行 MCP 服务器（供 Agent 启动）")
+    s.set_defaults(fn=lambda a: __import__("charavoice.mcp_server", fromlist=["main"]).main() or 0)
+
     s = sub.add_parser("serve", help="启动后端")
     s.add_argument("--port", type=int, default=0)
     s.add_argument("--parent-pid", type=int, default=0)

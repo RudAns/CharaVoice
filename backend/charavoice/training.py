@@ -93,7 +93,7 @@ def precheck(vid: str) -> dict[str, Any]:
     def add(key: str, ok: bool, label: str, detail: str, blocking: bool = True):
         items.append({"key": key, "ok": ok, "label": label, "detail": detail, "blocking": blocking and not ok})
 
-    add("engine", engine.installed(), "GPT-SoVITS 引擎", "已安装" if engine.installed() else "没有找到引擎，请运行 setup.bat")
+    add("engine", engine.installed(), "GPT-SoVITS 引擎", "已安装" if engine.installed() else "没有找到引擎，请在“模型”页安装 GPT-SoVITS")
     base = v.get("base") or "v2Pro"
     add("base", True, "基础模型", base if base in ("v2Pro", "v2ProPlus") else f"{base}（零样本用）；训练会使用 v2Pro 底模，训完自动切换", False)
     if g["ok"]:

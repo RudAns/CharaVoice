@@ -477,7 +477,7 @@ def _get_extractor():
         if _extractor is None:
             m = config.resolve(SPEAKER_MODEL)
             if not m.exists():
-                raise RuntimeError("缺少声纹模型（models/speaker），请运行 setup.bat。")
+                raise RuntimeError("缺少声纹模型，请在“模型”页安装 3D-Speaker CAM++。")
             _extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
                 sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(m), num_threads=2)
             )

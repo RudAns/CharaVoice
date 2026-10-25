@@ -4,12 +4,14 @@ import { useEffect, useState } from "preact/hooks";
 import { conn, connError, connect, engine, onEvent } from "./api";
 import { Ring } from "./components/Ring";
 import { Integration } from "./pages/Integration";
+import { Models } from "./pages/Models";
 import { Material } from "./pages/Material";
 import { Train } from "./pages/Train";
 import { Settings } from "./pages/Settings";
 import { Stage } from "./pages/Stage";
 import { Voices } from "./pages/Voices";
-import { go, page, refreshVoices, toast } from "./store";
+import { api } from "./api";
+import { go, missingAssets, page, refreshVoices, toast } from "./store";
 
 const NAV = [
   { id: "stage", label: "舞台", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z" },
@@ -17,6 +19,7 @@ const NAV = [
   { id: "material", label: "素材", icon: "M3 12h2l2-6 3 12 3-9 2 5 2-2h4" },
   { id: "train", label: "训练", icon: "M4 19h16M7 16V9M12 16V5M17 16v-4" },
   { id: "integration", label: "接入 Agent", icon: "M8 9l-4 3 4 3M16 9l4 3-4 3M13 6l-2 12" },
+  { id: "models", label: "模型", icon: "M12 3 3 7.5l9 4.5 9-4.5L12 3ZM3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5" },
   { id: "settings", label: "设置", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.2-1.3L14.4 3h-4l-.4 2.4a7.6 7.6 0 0 0-2.2 1.3l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.6l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.2 1.3l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.2-1.3l2.4 1 2-3.4-2-1.6c.1-.4.1-.9.1-1.3Z" },
 ];
 
@@ -32,8 +35,11 @@ export default function App() {
   useEffect(() => {
     if (!conn.value) return;
     refreshVoices().catch(() => {});
+    const checkAssets = () => api<{ missing_required: string[] }>("/v1/assets").then((r) => (missingAssets.value = r.missing_required)).catch(() => {});
+    checkAssets();
     return onEvent((ev) => {
       if (ev.type === "hello" || ev.type === "voices_changed") refreshVoices().catch(() => {});
+      if (ev.type === "asset" && ev.status !== "running") checkAssets();
     });
   }, [conn.value]);
 
@@ -84,6 +90,15 @@ export default function App() {
         </div>
       </nav>
       <main>
+        {missingAssets.value.length > 0 && page.value !== "models" && (
+          <div class="setup-banner">
+            还缺少 {missingAssets.value.length} 个必需组件（听写模型或语音引擎），装好后才能完整使用。
+            <button class="primary small" onClick={() => go("models")}>
+              去安装
+            </button>
+          </div>
+        )}
+        {page.value === "models" && <Models />}
         {page.value === "stage" && <Stage />}
         {page.value === "voices" && <Voices />}
         {page.value === "material" && <Material />}

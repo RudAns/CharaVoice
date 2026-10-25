@@ -3,8 +3,9 @@
 //! The window is a thin client of the Python backend. On start-up we either
 //! reuse a backend that is already running (found through data/runtime.json),
 //! or launch one: in development straight from the Python sources
-//! (`.venv` + `python -m charavoice serve`), in a packaged build as the
-//! `charavoice-backend` sidecar. The child is spawned in its own job object
+//! (`.venv` + `python -m charavoice serve`), in a packaged build as the frozen
+//! `resources/backend/charavoice-backend.exe`, with user data (models, engines,
+//! voices) in %LOCALAPPDATA%\<identifier>. The child is spawned in its own job object
 //! (`set_process_group`), so closing the window tears down the backend and the
 //! inference engine it started.
 
@@ -43,8 +44,9 @@ struct BackendInfo {
     managed: bool,
 }
 
-/// Install root: CHARAVOICE_HOME, else the repository root in development,
-/// else the folder that contains the executable.
+/// Data root: CHARAVOICE_HOME, else the repository root in development, else
+/// %LOCALAPPDATA%\io.github.rudans.charavoice (the frozen backend uses the same default,
+/// so the CLI and MCP server find it without any configuration).
 fn home_dir() -> PathBuf {
     if let Ok(h) = std::env::var("CHARAVOICE_HOME") {
         return PathBuf::from(h);
@@ -52,10 +54,16 @@ fn home_dir() -> PathBuf {
     if cfg!(debug_assertions) {
         return Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
+    let base = std::env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
+    let dir = base.join("io.github.rudans.charavoice");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// The packaged backend executable (also the CLI and the stdio MCP server).
+fn backend_exe(app: &AppHandle) -> Option<PathBuf> {
+    let p = app.path().resource_dir().ok()?.join("backend").join("charavoice-backend.exe");
+    p.exists().then_some(p)
 }
 
 fn read_runtime(home: &Path) -> Option<BackendInfo> {
@@ -108,12 +116,13 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUNBUFFERED", "1")
     } else {
+        let exe = backend_exe(app).ok_or("安装不完整：没有找到 backend\\charavoice-backend.exe，请重新安装 CharaVoice。")?;
         shell
-            .sidecar("charavoice-backend")
-            .map_err(|e| e.to_string())?
+            .command(exe)
             .args(["serve", "--parent-pid", &pid])
             .current_dir(&home)
             .env("CHARAVOICE_HOME", &home)
+            .env("PYTHONIOENCODING", "utf-8")
     };
     let (mut rx, child) = cmd.set_process_group(true).spawn().map_err(|e| format!("无法启动后端：{e}"))?;
     *app.state::<Backend>().child.lock().unwrap() = Some(child);
@@ -257,6 +266,25 @@ async fn toggle_companion(app: AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Commands an agent can run: the CLI and the stdio MCP server (development: the .venv scripts).
+#[derive(Serialize)]
+struct ToolPaths {
+    cli: String,
+    mcp: String,
+    mcp_args: Vec<String>,
+}
+
+#[tauri::command]
+fn tool_paths(app: AppHandle) -> ToolPaths {
+    let clean = |p: PathBuf| p.display().to_string().trim_start_matches(r"\\?\").to_string();
+    if let Some(exe) = backend_exe(&app).filter(|_| !cfg!(debug_assertions)) {
+        let e = clean(exe);
+        return ToolPaths { cli: e.clone(), mcp: e, mcp_args: vec!["mcp".into()] };
+    }
+    let scripts = home_dir().canonicalize().unwrap_or_else(|_| home_dir()).join(".venv").join("Scripts");
+    ToolPaths { cli: clean(scripts.join("charavoice.exe")), mcp: clean(scripts.join("charavoice-mcp.exe")), mcp_args: vec![] }
+}
+
 #[tauri::command]
 fn home_path() -> String {
     home_dir().canonicalize().unwrap_or_else(|_| home_dir()).display().to_string()
@@ -301,7 +329,7 @@ pub fn run() {
                 let _ = w.app_handle().emit("companion", false);
             }
         })
-        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey])
+        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, tool_paths])
         .build(tauri::generate_context!())
         .expect("error while building CharaVoice")
         .run(|app, event| {

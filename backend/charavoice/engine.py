@@ -224,7 +224,7 @@ class Engine:
             await self._kill()
 
     def missing_message(self) -> str:
-        return f"没有找到 GPT-SoVITS 引擎（{self.settings['dir']}），请先运行 setup.bat 安装"
+        return f"没有找到 GPT-SoVITS 引擎（{self.settings['dir']}），请在“模型”页安装 GPT-SoVITS"
 
     def _launch(self, port: int) -> tuple[list[str], str, dict]:
         cfg = self._write_config()
@@ -435,7 +435,7 @@ class OmniEngine(Engine):
         return self.python().exists() and (self.dir / ".venv" / "Lib" / "site-packages" / "omnivoice").exists()
 
     def missing_message(self) -> str:
-        return "没有安装 OmniVoice 引擎。运行 setup.bat --with-omnivoice，或在“模型”页安装。"
+        return "没有安装 OmniVoice 引擎，请在“模型”页安装。"
 
     def _launch(self, port: int) -> tuple[list[str], str, dict]:
         script = Path(__file__).parent / "engine_scripts" / "omnivoice_server.py"

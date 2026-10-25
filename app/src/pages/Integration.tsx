@@ -117,17 +117,18 @@ function AgentVoices() {
 }
 
 export function Integration() {
-  const [home, setHome] = useState("");
+  const [tools, setTools] = useState<{ cli: string; mcp: string; mcp_args: string[] } | null>(null);
   const [showToken, setShowToken] = useState(false);
   const [info, setInfo] = useState<{ mcp_url: string; agent_token: string } | null>(null);
   useEffect(() => {
-    invoke<string>("home_path").then((p) => setHome(p.replace(/^\\\\\?\\/, "")));
+    invoke<{ cli: string; mcp: string; mcp_args: string[] }>("tool_paths").then(setTools);
     api<{ mcp_url: string; agent_token: string }>("/v1/integration").then(setInfo);
   }, []);
   const c = conn.value;
-  if (!c || !info) return null;
+  if (!c || !info || !tools) return null;
   const voice = selected.value?.id ?? "<声音id>";
-  const exe = `${home}\\.venv\\Scripts`;
+  const cli = `"${tools.cli}"`;
+  const mcpCmd = [`"${tools.mcp}"`, ...tools.mcp_args].join(" ");
   const token = showToken ? info.agent_token : "•".repeat(12);
   const rotate = async () => {
     setInfo(await api("/v1/integration/rotate-token", { method: "POST" }));
@@ -181,16 +182,16 @@ export function Integration() {
       <p>
         <strong>stdio</strong>（由 Agent 启动一个小进程转发）：
       </p>
-      <Code title="cmd" text={`claude mcp add charavoice -- "${exe}\\charavoice-mcp.exe"`} />
+      <Code title="cmd" text={`claude mcp add charavoice -- ${mcpCmd}`} />
 
       <h3>2. 命令行</h3>
       <Code
         title="cmd"
         text={[
-          `"${exe}\\charavoice.exe" speak "你好，我们开始吧。" --voice ${voice}`,
-          `"${exe}\\charavoice.exe" speak "我用自己的声音说话" --agent my-agent`,
-          `"${exe}\\charavoice.exe" listen --timeout 15`,
-          `"${exe}\\charavoice.exe" voices`,
+          `${cli} speak "你好，我们开始吧。" --voice ${voice}`,
+          `${cli} speak "我用自己的声音说话" --agent my-agent`,
+          `${cli} listen --timeout 15`,
+          `${cli} voices`,
         ].join("\n")}
       />
 

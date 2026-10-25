@@ -1267,3 +1267,36 @@ async def build_breaths(vid: str):
         files.append(Path(voices.abspath(v, v["ref"]["audio"])))
     idx = await asyncio.to_thread(breaths.build, vid, files)
     return {"breaths": idx, "scanned": len(files)}
+
+
+# ---------------------------------------------------------------- model manager (P6)
+@app.get("/v1/assets", dependencies=[Depends(auth)])
+async def list_assets():
+    from . import assets
+
+    return {"assets": assets.listing(), "missing_required": assets.missing_required(), "home": str(config.ROOT)}
+
+
+@app.post("/v1/assets/{aid}/install", dependencies=[Depends(auth)])
+async def install_asset(aid: str):
+    from . import assets
+
+    return {"job": assets.start(aid).state()}
+
+
+@app.post("/v1/assets/{aid}/cancel", dependencies=[Depends(auth)])
+async def cancel_asset(aid: str):
+    from . import assets
+
+    return {"cancelled": assets.cancel(aid)}
+
+
+@app.delete("/v1/assets/{aid}", dependencies=[Depends(auth)])
+async def delete_asset(aid: str):
+    from . import assets
+    from .engine import engine_for
+
+    if aid in ("gpt-sovits", "omnivoice"):
+        await engine_for(aid).stop()
+    await asyncio.to_thread(assets.remove, aid)
+    return {"deleted": aid}
