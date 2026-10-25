@@ -1,6 +1,6 @@
 // Training material: add sources (files / loopback recordings), trim, process, review, export.
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { api, LANG_LABEL, onEvent, url } from "../api";
+import { api, EMOTION_LABEL, LANG_LABEL, onEvent, url } from "../api";
 import { RecordPanel } from "../components/RecordPanel";
 import { WaveEditor } from "../components/WaveEditor";
 import { go, notify, select, selected, voices } from "../store";
@@ -299,6 +299,11 @@ export function Material() {
                       <option value={l}>{LANG_LABEL[l] ?? l}</option>
                     ))}
                   </select>
+                  <select class="emo-sel" value={EMOTION_LABEL[i.emotion] ? i.emotion : "neutral"} onChange={(e) => patchItem(i.id, { emotion: (e.target as HTMLSelectElement).value })} title="情绪（SenseVoice 自动识别，可改）">
+                    {Object.entries(EMOTION_LABEL).map(([k, l]) => (
+                      <option value={k}>{l}</option>
+                    ))}
+                  </select>
                   <span class="dur">{i.duration.toFixed(1)}s</span>
                   <span
                     class={`badge ${i.score >= 70 ? "good" : i.score >= 40 ? "mid" : "bad"}`}
@@ -309,6 +314,19 @@ export function Material() {
                   <span class={`badge ${i.similarity === null ? "" : i.similarity >= 0.6 ? "good" : i.similarity >= 0.4 ? "mid" : "bad"}`} title="与目标说话人的声纹相似度">
                     声纹 {i.similarity === null ? "—" : i.similarity.toFixed(2)}
                   </span>
+                  <button
+                    class="small"
+                    disabled={i.duration < 3}
+                    title={i.duration < 3 ? "参考音频需要 3 秒以上" : "把这段设为该情绪的参考音频"}
+                    onClick={() =>
+                      api(`/v1/voices/${v.id}/refs/from-clip`, { method: "POST", json: { item_id: i.id, emotion: EMOTION_LABEL[i.emotion] ? i.emotion : "neutral" } }).then(
+                        () => notify(`已设为「${EMOTION_LABEL[i.emotion] ?? "平静"}」参考`),
+                        (e) => notify(e.message, "error"),
+                      )
+                    }
+                  >
+                    设为参考
+                  </button>
                   <button class="small" onClick={() => patchItem(i.id, { deleted: !i.deleted })}>
                     {i.deleted ? "恢复" : "删除"}
                   </button>

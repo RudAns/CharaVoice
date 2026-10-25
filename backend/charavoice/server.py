@@ -173,6 +173,8 @@ def _voice_public(v: dict) -> dict:
         "ready": bool(v.get("ref")),
         "trained": bool((v.get("weights") or {}).get("sovits") or (v.get("weights") or {}).get("gpt")),
         "ref": v.get("ref"),
+        "refs": [{**r, "url": f"/v1/voices/{v['id']}/refs/{r['id']}/audio"} for r in v.get("refs") or []],
+        "emotions": voices.emotions_of(v),
         "consent": v.get("consent"),
         "params": v.get("params"),
         "created_at": v.get("created_at"),
@@ -347,6 +349,7 @@ class SpeechRequest(BaseModel):
     play: bool | None = Field(default=None, description="由 CharaVoice 在本机播放；false 则只返回音频")
     instructions: str | None = None
     streaming_mode: int | None = Field(default=None, ge=0, le=3, description="0 整段 / 1 逐句 / 2 流式 / 3 极速流式；省略按设置")
+    emotion: str | None = Field(default=None, description="neutral / happy / angry / sad / surprised / fearful / gentle；用声音里带该标签的参考音频")
 
 
 def _pick_voice(*candidates: str | None) -> str | None:
@@ -373,7 +376,7 @@ async def audio_speech(body: SpeechRequest):
     fmt = (body.response_format or "wav").lower()
     if streaming and fmt not in ("wav", "pcm"):
         raise ApiError(400, "流式输出只支持 response_format=wav 或 pcm。")
-    job = speech.start(body.input, vid, body.language, play=body.play, speed=body.speed, live=streaming, streaming_mode=body.streaming_mode)
+    job = speech.start(body.input, vid, body.language, play=body.play, speed=body.speed, live=streaming, streaming_mode=body.streaming_mode, emotion=body.emotion)
     if streaming:
         from . import compliance
 
@@ -406,6 +409,7 @@ class SpeakBody(BaseModel):
     speed: float | None = Field(default=None, ge=0.25, le=4.0)
     wait: bool = Field(default=False, description="等到播放结束再返回")
     low_latency: bool = Field(default=False, description="极速流式：首包约 0.2 秒，音质略低；默认逐句流式（首包约 0.5-0.8 秒）")
+    emotion: str | None = Field(default=None, description="neutral / happy / angry / sad / surprised / fearful / gentle")
 
 
 @app.post("/v1/speak", dependencies=[Depends(auth)])
@@ -413,7 +417,7 @@ async def speak(body: SpeakBody):
     """Convenience endpoint for agents/CLI: synthesize and play locally, return JSON."""
     vid = _pick_voice(body.voice)
     t0 = time.monotonic()
-    job = speech.start(body.text, vid, body.language, play=True, speed=body.speed, streaming_mode=3 if body.low_latency else None)
+    job = speech.start(body.text, vid, body.language, play=True, speed=body.speed, streaming_mode=3 if body.low_latency else None, emotion=body.emotion)
     utt = job.utterance
     assert utt is not None
     started = await asyncio.to_thread(_wait_any, utt, 120.0)
@@ -430,6 +434,7 @@ async def speak(body: SpeakBody):
         "id": utt.id,
         "voice": job.voice["id"],
         "language": job.request.text_lang,
+        "emotion": body.emotion or "neutral",
         "started": started,
         "finished": utt.done.is_set(),
         "audio_seconds": seconds if job.done.is_set() else None,
@@ -706,6 +711,7 @@ async def dataset_cancel(vid: str):
 
 class ItemPatch(BaseModel):
     text: str | None = None
+    emotion: str | None = None
     lang: str | None = None
     deleted: bool | None = None
 
@@ -922,3 +928,70 @@ async def watermark_detect(file: UploadFile = File(...)):
     samples = await asyncio.to_thread(audio_util.decode, await file.read(), 16000)
     r = await asyncio.to_thread(watermark.detect, samples, 16000)
     return r | {"note": "probability > 0.5 表示检测到 AudioSeal 水印；charavoice=true 表示 16 位标识也匹配（有损压缩后标识可能读不出）"}
+
+
+
+# ---------------------------------------------------------------- emotion references (P2)
+@app.get("/v1/emotions", dependencies=[Depends(auth)])
+async def list_emotions():
+    return {"emotions": [{"id": k, "label": v} for k, v in voices.EMOTIONS.items()]}
+
+
+async def _store_emotion_ref(v: dict, raw: bytes, text: str, lang: str, emotion: str, source: str) -> dict:
+    rel = f"ref/{emotion}-{secrets.token_hex(3)}.wav"
+    dst = voices.folder(v["id"]) / rel
+    dur = await asyncio.to_thread(audio_util.to_wav_file, raw, dst, 32000)
+    if dur < 3 or dur > 10:
+        dst.unlink(missing_ok=True)
+        raise ApiError(400, f"参考音频时长 {dur:.1f} 秒，需要在 3-10 秒之间。")
+    if not text.strip() or not lang:
+        r = await asyncio.to_thread(asr.transcribe, await asyncio.to_thread(audio_util.decode, dst, 16000))
+        text = text.strip() or r["text"]
+        lang = lang or (r["language"] if r["language"] in voices.LANGS else v.get("language", "zh"))
+    return voices.add_emotion_ref(v["id"], rel, text, speech.norm_lang(lang, text), dur, emotion, source)
+
+
+@app.post("/v1/voices/{vid}/refs", dependencies=[Depends(auth)])
+async def add_ref(vid: str, file: UploadFile = File(...), emotion: str = Form(...), text: str = Form(""), lang: str = Form("")):
+    """Add a reference clip tagged with an emotion (3-10 s)."""
+    v = _voice_or_404(vid)
+    if emotion not in voices.EMOTIONS:
+        raise ApiError(400, f"未知的情绪标签：{emotion}")
+    return _voice_public(await _store_emotion_ref(v, await file.read(), text, lang, emotion, "upload"))
+
+
+class RefFromClip(BaseModel):
+    item_id: str
+    emotion: str
+
+
+@app.post("/v1/voices/{vid}/refs/from-clip", dependencies=[Depends(auth)])
+async def add_ref_from_clip(vid: str, body: RefFromClip):
+    """Use a reviewed training clip as an emotion reference."""
+    v = _voice_or_404(vid)
+    if body.emotion not in voices.EMOTIONS:
+        raise ApiError(400, f"未知的情绪标签：{body.emotion}")
+    data = await asyncio.to_thread(dataset.load, vid)
+    it = next((i for i in data["items"] if i["id"] == body.item_id), None)
+    if not it:
+        raise ApiError(404, "找不到这个片段", "not_found")
+    raw = (dataset.ddir(vid) / "clips" / f"{it['id']}.wav").read_bytes()
+    return _voice_public(await _store_emotion_ref(v, raw, it["text"], it["lang"], body.emotion, f"clip:{it['id']}"))
+
+
+@app.delete("/v1/voices/{vid}/refs/{rid}", dependencies=[Depends(auth)])
+async def delete_ref(vid: str, rid: str):
+    _voice_or_404(vid)
+    try:
+        return _voice_public(voices.remove_emotion_ref(vid, rid))
+    except KeyError:
+        raise ApiError(404, "找不到这段参考音频", "not_found")
+
+
+@app.get("/v1/voices/{vid}/refs/{rid}/audio", dependencies=[Depends(auth)])
+async def ref_audio(vid: str, rid: str):
+    v = _voice_or_404(vid)
+    r = next((x for x in v.get("refs") or [] if x["id"] == rid), None)
+    if not r:
+        raise ApiError(404, "找不到这段参考音频", "not_found")
+    return FileResponse(voices.abspath(v, r["audio"]), media_type="audio/wav")

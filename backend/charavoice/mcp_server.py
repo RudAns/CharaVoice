@@ -36,11 +36,14 @@ def _guard(fn):
 @server.tool(description="Say text aloud through the user's speakers in a CharaVoice character voice. "
                          "language: zh / en / ja / auto (default: detected from the text). "
                          "wait=true blocks until playback finishes. Audio streams sentence by sentence, so it starts in well under a second; "
-                         "low_latency=true starts even sooner at slightly lower quality.")
-def speak(text: str, voice: str | None = None, language: str | None = None, wait: bool = False, low_latency: bool = False) -> str:
+                         "low_latency=true starts even sooner at slightly lower quality. "
+                         "emotion: neutral / happy / angry / sad / surprised / fearful / gentle - uses the voice's reference clip "
+                         "tagged with that emotion (list_voices shows which ones each voice has); falls back to neutral.")
+def speak(text: str, voice: str | None = None, language: str | None = None, wait: bool = False, low_latency: bool = False,
+          emotion: str | None = None) -> str:
     def run():
         with connect(timeout=900) as c:
-            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language, "wait": wait, "low_latency": low_latency}).json()
+            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language, "wait": wait, "low_latency": low_latency, "emotion": emotion}).json()
         state = "finished playing" if r["finished"] else "playing"
         secs = f", {r['audio_seconds']}s of audio" if r.get("audio_seconds") else ""
         lat = f", audio started after {r['latency_ms']} ms" if r.get("latency_ms") is not None else ""
@@ -49,13 +52,14 @@ def speak(text: str, voice: str | None = None, language: str | None = None, wait
     return _guard(run)
 
 
-@server.tool(description="List the character voices available in CharaVoice (id, name, language, whether fine-tuned).")
+@server.tool(description="List the character voices available in CharaVoice (id, name, language, whether fine-tuned, emotions it can speak with).")
 def list_voices() -> list[dict]:
     def run():
         with connect() as c:
             data = call(c, "GET", "/v1/voices").json()["data"]
         return [
-            {"id": v["id"], "name": v["name"], "language": v["language"], "trained": v["trained"], "ready": v["ready"], "default": v.get("default", False)}
+            {"id": v["id"], "name": v["name"], "language": v["language"], "trained": v["trained"], "ready": v["ready"],
+             "default": v.get("default", False), "emotions": v.get("emotions", [])}
             for v in data
         ]
 

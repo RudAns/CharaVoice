@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { api, LANG_LABEL, url, type AvatarSlot, type Voice } from "../api";
+import { api, EMOTION_LABEL, LANG_LABEL, url, type AvatarSlot, type Voice } from "../api";
 import { Showcase } from "../components/Showcase";
 import { notify, refreshVoices, select, selected, voices } from "../store";
 
@@ -181,6 +181,9 @@ function VoiceDetail({ v }: { v: Voice }) {
         <p class="muted">支持 GIF、APNG、动态 WebP，以及短循环视频 WebM / MP4（WebM 可带透明通道）。</p>
       </div>
 
+      <h3>情绪参考</h3>
+      <EmotionRefs v={v} />
+
       <h3>使用授权</h3>
       <div class="card consent-card">
         <p>
@@ -296,6 +299,46 @@ function CreateVoice({ onClose }: { onClose: () => void }) {
             {busy ? "正在处理…" : "创建"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function EmotionRefs({ v }: { v: Voice }) {
+  const [emotion, setEmotion] = useState("happy");
+  async function add(f: File) {
+    const fd = new FormData();
+    fd.append("file", f);
+    fd.append("emotion", emotion);
+    try {
+      await api(`/v1/voices/${v.id}/refs`, { method: "POST", body: fd });
+      await refreshVoices();
+      notify(`已添加「${EMOTION_LABEL[emotion]}」参考音频`);
+    } catch (e: any) {
+      notify(e.message, "error");
+    }
+  }
+  return (
+    <div class="card">
+      <p class="muted">给声音再挂几段带情绪的 3-10 秒录音。Agent 调用时传 emotion（例如 happy），就会用对应的参考音频说话；没有的情绪用主参考音频。也可以在素材页的审阅区把某个片段直接设为情绪参考。</p>
+      <div class="refs">
+        {(v.refs ?? []).map((r) => (
+          <div class="ref-row">
+            <span class={`emo emo-${r.emotion}`}>{EMOTION_LABEL[r.emotion] ?? r.emotion}</span>
+            <audio controls src={url(r.url, true)} />
+            <span class="ref-line" title={r.text}>“{r.text}” · {r.duration}s</span>
+            <button class="small" onClick={() => api(`/v1/voices/${v.id}/refs/${r.id}`, { method: "DELETE" }).then(refreshVoices)}>移除</button>
+          </div>
+        ))}
+        {!(v.refs ?? []).length && <p class="muted">还没有情绪参考。</p>}
+      </div>
+      <div class="btn-row">
+        <select value={emotion} onChange={(e) => setEmotion((e.target as HTMLSelectElement).value)} aria-label="情绪">
+          {Object.entries(EMOTION_LABEL).filter(([k]) => k !== "neutral").map(([k, l]) => (
+            <option value={k}>{l}</option>
+          ))}
+        </select>
+        <FileButton accept="audio/*,video/*" label="上传这个情绪的参考音频" onFile={add} />
       </div>
     </div>
   );

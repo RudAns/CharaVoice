@@ -24,6 +24,8 @@ export interface Voice {
   default?: boolean;
   ref: { audio: string; text: string; lang: string; duration: number } | null;
   consent: { kind: string; label: string; notice: string; confirmed_at: string };
+  refs?: { id: string; text: string; lang: string; duration: number; emotion: string; url: string }[];
+  emotions?: string[];
   params: Record<string, number>;
   avatar: Record<AvatarSlot, { url: string; kind: "image" | "video" } | null>;
   avatar_mode?: "circle" | "free";
@@ -136,3 +138,6 @@ export async function connect(): Promise<void> {
 }
 
 export const LANG_LABEL: Record<string, string> = { zh: "中文", en: "English", ja: "日本語", auto: "自动" };
+export const EMOTION_LABEL: Record<string, string> = {
+  neutral: "平静", happy: "开心", angry: "生气", sad: "悲伤", surprised: "惊讶", fearful: "害怕", gentle: "温柔",
+};

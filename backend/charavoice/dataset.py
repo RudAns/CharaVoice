@@ -514,6 +514,8 @@ def edit_item(vid: str, item_id: str, patch: dict[str, Any]) -> dict[str, Any]:
                     i["score"] = _score(i["quality"], i["duration"], bool(i["text"]))
                 if "lang" in patch and patch["lang"] in ("zh", "en", "ja", "ko", "yue"):
                     i["lang"] = patch["lang"]
+                if patch.get("emotion") in voices.EMOTIONS:
+                    i["emotion"] = patch["emotion"]
                 if "deleted" in patch and patch["deleted"] is not None:
                     i["deleted"] = bool(patch["deleted"])
                 save(vid, data)

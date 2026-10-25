@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, engine, LANG_LABEL, listening, onEvent, presence } from "../api";
+import { api, EMOTION_LABEL, engine, LANG_LABEL, listening, onEvent, presence } from "../api";
 import { Showcase } from "../components/Showcase";
 import { go, notify, select, selected, voices } from "../store";
 
@@ -17,6 +17,7 @@ export function Stage() {
   const v = selected.value;
   const [text, setText] = useState("");
   const [lang, setLang] = useState("auto");
+  const [emotion, setEmotion] = useState("neutral");
   const [busy, setBusy] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
   const feed = useRef<HTMLDivElement>(null);
@@ -48,7 +49,7 @@ export function Stage() {
     if (!t || !v) return;
     setBusy(true);
     try {
-      await api("/v1/speak", { method: "POST", json: { text: t, voice: v.id, language: lang === "auto" ? null : lang } });
+      await api("/v1/speak", { method: "POST", json: { text: t, voice: v.id, language: lang === "auto" ? null : lang, emotion } });
       setText("");
     } catch (e: any) {
       notify(e.message, "error");
@@ -131,6 +132,13 @@ export function Stage() {
                 </button>
               ))}
             </div>
+            {(v?.emotions?.length ?? 0) > 1 && (
+              <select class="emo-pick" value={emotion} onChange={(e) => setEmotion((e.target as HTMLSelectElement).value)} aria-label="情绪">
+                {v!.emotions!.map((k) => (
+                  <option value={k}>{EMOTION_LABEL[k] ?? k}</option>
+                ))}
+              </select>
+            )}
             <div class="grow" />
             <button
               class={`mic ${listening.value ? "on" : ""}`}

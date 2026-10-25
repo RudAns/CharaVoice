@@ -45,8 +45,11 @@ def norm_lang(lang: str | None, text: str) -> str:
     return detect_lang(text) if v == "auto" else v
 
 
-def build_request(voice: dict, text: str, language: str | None, speed: float | None = None, streaming_mode: int | None = None) -> SynthRequest:
-    ref = voice.get("ref")
+def build_request(voice: dict, text: str, language: str | None, speed: float | None = None,
+                  streaming_mode: int | None = None, emotion: str | None = None) -> SynthRequest:
+    if emotion and emotion not in voices.EMOTIONS:
+        raise ValueError(f"未知的情绪：{emotion}（可用：{', '.join(voices.EMOTIONS)}）")
+    ref = voices.pick_ref(voice, emotion)
     if not ref:
         raise LookupError(f"声音“{voice['name']}”还没有参考音频，请先在声音设置里上传一段 3-10 秒的参考音频。")
     s = config.load_settings()["engine"]
@@ -111,7 +114,8 @@ async def _produce(job: SpeakJob) -> None:
 
 
 def start(text: str, voice: str | None = None, language: str | None = None, play: bool | None = None,
-          speed: float | None = None, live: bool = False, streaming_mode: int | None = None) -> SpeakJob:
+          speed: float | None = None, live: bool = False, streaming_mode: int | None = None,
+          emotion: str | None = None) -> SpeakJob:
     """Begin synthesis (and playback). Raises LookupError/ValueError for bad input."""
     text = (text or "").strip()
     if not text:
@@ -119,7 +123,7 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
     if len(text) > 4000:
         raise ValueError("文字太长（上限 4000 字）。请分段调用。")
     v = voices.find(voice)
-    req = build_request(v, text, language, speed, streaming_mode)
+    req = build_request(v, text, language, speed, streaming_mode, emotion)
     if play is None:
         play = bool(config.load_settings()["speech"]["play_locally"])
     job = SpeakJob(voice=v, text=text, request=req, play=play, live=asyncio.Queue() if live else None)

@@ -25,6 +25,11 @@ from . import config
 from .events import bus
 
 CONSENT_NOTICE = "请告知被模仿的人并取得其单独同意。"
+# Emotion labels for extra reference clips (same set SenseVoice reports, plus "gentle").
+EMOTIONS = {
+    "neutral": "平静", "happy": "开心", "angry": "生气", "sad": "悲伤",
+    "surprised": "惊讶", "fearful": "害怕", "gentle": "温柔",
+}
 CONSENT_KINDS = {"self": "本人声音", "authorized": "已获授权的声音"}
 AVATAR_STATES = ("default", "idle", "listening", "speaking")
 AVATAR_EXT = {".gif", ".png", ".apng", ".webp", ".webm", ".mp4"}
@@ -156,6 +161,53 @@ def set_ref(vid: str, rel_audio: str, text: str, lang: str, duration: float) -> 
         v["ref"] = {"audio": rel_audio, "text": text.strip(), "lang": lang, "duration": round(duration, 2)}
         _write(v)
     return v
+
+
+def add_emotion_ref(vid: str, rel_audio: str, text: str, lang: str, duration: float, emotion: str, source: str = "upload") -> dict[str, Any]:
+    """Attach an extra reference clip tagged with an emotion; speak(emotion=...) picks it."""
+    if emotion not in EMOTIONS:
+        raise ValueError(f"未知的情绪标签：{emotion}（可用：{', '.join(EMOTIONS)}）")
+    with _lock:
+        v = _read(vid)
+        refs = v.setdefault("refs", [])
+        rid = uuid.uuid4().hex[:6]
+        refs.append({"id": rid, "audio": rel_audio, "text": text.strip(), "lang": lang, "duration": round(duration, 2),
+                     "emotion": emotion, "source": source, "added_at": now_iso()})
+        _write(v)
+    return v
+
+
+def remove_emotion_ref(vid: str, rid: str) -> dict[str, Any]:
+    with _lock:
+        v = _read(vid)
+        refs = v.get("refs") or []
+        hit = next((r for r in refs if r["id"] == rid), None)
+        if not hit:
+            raise KeyError(rid)
+        v["refs"] = [r for r in refs if r["id"] != rid]
+        _write(v)
+    (folder(vid) / hit["audio"]).unlink(missing_ok=True)
+    return v
+
+
+def pick_ref(v: dict[str, Any], emotion: str | None) -> dict[str, Any] | None:
+    """Reference clip for an emotion: tagged clips first (longest wins), else the main reference."""
+    if emotion and emotion != "neutral":
+        tagged = [r for r in v.get("refs") or [] if r.get("emotion") == emotion]
+        if tagged:
+            return max(tagged, key=lambda r: r.get("duration", 0))
+    if emotion == "neutral":
+        tagged = [r for r in v.get("refs") or [] if r.get("emotion") == "neutral"]
+        if tagged and not v.get("ref"):
+            return max(tagged, key=lambda r: r.get("duration", 0))
+    return v.get("ref")
+
+
+def emotions_of(v: dict[str, Any]) -> list[str]:
+    tags = {r["emotion"] for r in v.get("refs") or []}
+    if v.get("ref"):
+        tags.add("neutral")
+    return [e for e in EMOTIONS if e in tags]
 
 
 def set_weights(vid: str, gpt: str | None, sovits: str | None) -> dict[str, Any]:
