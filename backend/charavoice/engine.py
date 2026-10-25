@@ -88,6 +88,7 @@ class Engine:
         self._client: httpx.AsyncClient | None = None
         # set while a training run owns the GPU: synthesis is refused instead of auto-starting
         self.hold: str | None = None
+        self._waiting = 0  # real (non-warm-up) requests queued for the engine
 
     # ---------- paths ----------
     @property
@@ -259,13 +260,20 @@ class Engine:
 
         try:
             v = voices.find(None)
-            req = speech.build_request(v, "你好。" if v.get("language") != "en" else "Hello.", None, streaming_mode=0)
+            # warm the default voice's weights, each language front-end (zh needs the BERT path),
+            # and both streaming paths agents use (sentence streaming and low-latency streaming)
+            texts = ["你好，今天过得怎么样？", "Hello there, how are you today?", "こんにちは、元気ですか。"]
+            reqs = [speech.build_request(v, t, None, streaming_mode=m) for t in texts for m in (1, 3)]
         except (LookupError, EngineUnavailable):
             return
         t0 = time.monotonic()
         try:
-            async for _ in self.synthesize(req, presence=False):
-                pass
+            for req in reqs:
+                if self._waiting:  # a real request arrived: stop warming up and let it through
+                    log.info("engine warm-up yielded to a request")
+                    return
+                async for _ in self.synthesize(req, presence=False):
+                    pass
             log.info("engine warm-up done in %.1fs", time.monotonic() - t0)
         except EngineUnavailable as e:
             log.warning("engine warm-up failed: %s", e)
@@ -309,7 +317,14 @@ class Engine:
             "parallel_infer": True,
             "use_cuda_graph": bool(self.settings.get("use_cuda_graph", True)),
         }
-        async with self._synth_lock:
+        if presence:
+            self._waiting += 1
+        try:
+            await self._synth_lock.acquire()
+        finally:
+            if presence:
+                self._waiting -= 1
+        try:
             if presence:
                 bus.enter(THINKING)
             try:
@@ -351,6 +366,8 @@ class Engine:
             finally:
                 if presence:
                     bus.leave(THINKING)
+        finally:
+            self._synth_lock.release()
 
 
 def _parse_wav_header(buf: bytes) -> tuple[int, int]:

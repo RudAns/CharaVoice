@@ -35,14 +35,16 @@ def _guard(fn):
 
 @server.tool(description="Say text aloud through the user's speakers in a CharaVoice character voice. "
                          "language: zh / en / ja / auto (default: detected from the text). "
-                         "wait=true blocks until playback finishes.")
-def speak(text: str, voice: str | None = None, language: str | None = None, wait: bool = False) -> str:
+                         "wait=true blocks until playback finishes. Audio streams sentence by sentence, so it starts in well under a second; "
+                         "low_latency=true starts even sooner at slightly lower quality.")
+def speak(text: str, voice: str | None = None, language: str | None = None, wait: bool = False, low_latency: bool = False) -> str:
     def run():
         with connect(timeout=900) as c:
-            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language, "wait": wait}).json()
+            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language, "wait": wait, "low_latency": low_latency}).json()
         state = "finished playing" if r["finished"] else "playing"
         secs = f", {r['audio_seconds']}s of audio" if r.get("audio_seconds") else ""
-        return f"Spoken with voice '{r['voice']}' ({r['language']}): {state}{secs}."
+        lat = f", audio started after {r['latency_ms']} ms" if r.get("latency_ms") is not None else ""
+        return f"Spoken with voice '{r['voice']}' ({r['language']}): {state}{secs}{lat}."
 
     return _guard(run)
 

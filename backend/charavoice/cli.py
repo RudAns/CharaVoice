@@ -65,12 +65,13 @@ def cmd_speak(a) -> int:
                 f.write(r.content)
             _out(f"已保存 {a.out}（声音 {r.headers.get('x-charavoice-voice')}）")
             return 0
-        r = call(c, "POST", "/v1/speak", json={"text": text, "voice": a.voice, "language": a.lang, "wait": not a.no_wait}).json()
+        r = call(c, "POST", "/v1/speak", json={"text": text, "voice": a.voice, "language": a.lang, "wait": not a.no_wait, "low_latency": a.fast}).json()
         if a.json:
             _out(json.dumps(r, ensure_ascii=False))
         else:
             secs = f"，{r['audio_seconds']} 秒" if r.get("audio_seconds") else ""
-            _out(f"[{r['voice']} · {r['language']}] 已播放{secs}" if r["finished"] else f"[{r['voice']} · {r['language']}] 正在播放")
+            lat = f"，{r['latency_ms']}ms 开口" if r.get("latency_ms") is not None else ""
+            _out(f"[{r['voice']} · {r['language']}] 已播放{secs}{lat}" if r["finished"] else f"[{r['voice']} · {r['language']}] 正在播放{lat}")
     return 0
 
 
@@ -144,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--voice", "-v")
     s.add_argument("--lang", "-l", help="zh / en / ja / auto（默认按文字自动判断）")
     s.add_argument("--no-wait", action="store_true", help="开始播放就返回，不等播完")
+    s.add_argument("--fast", action="store_true", help="极速流式，首包更快、音质略低")
     s.add_argument("--out", "-o", help="保存为文件（wav/mp3/flac/opus）而不是只播放")
     s.add_argument("--no-play", action="store_true", help="配合 --out：只保存不播放")
     s.add_argument("--json", action="store_true")

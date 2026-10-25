@@ -346,6 +346,7 @@ class SpeechRequest(BaseModel):
     stream_format: str | None = None
     play: bool | None = Field(default=None, description="由 CharaVoice 在本机播放；false 则只返回音频")
     instructions: str | None = None
+    streaming_mode: int | None = Field(default=None, ge=0, le=3, description="0 整段 / 1 逐句 / 2 流式 / 3 极速流式；省略按设置")
 
 
 def _pick_voice(*candidates: str | None) -> str | None:
@@ -372,7 +373,7 @@ async def audio_speech(body: SpeechRequest):
     fmt = (body.response_format or "wav").lower()
     if streaming and fmt not in ("wav", "pcm"):
         raise ApiError(400, "流式输出只支持 response_format=wav 或 pcm。")
-    job = speech.start(body.input, vid, body.language, play=body.play, speed=body.speed, live=streaming)
+    job = speech.start(body.input, vid, body.language, play=body.play, speed=body.speed, live=streaming, streaming_mode=body.streaming_mode)
     if streaming:
         from . import compliance
 
@@ -404,6 +405,7 @@ class SpeakBody(BaseModel):
     language: str | None = None
     speed: float | None = Field(default=None, ge=0.25, le=4.0)
     wait: bool = Field(default=False, description="等到播放结束再返回")
+    low_latency: bool = Field(default=False, description="极速流式：首包约 0.2 秒，音质略低；默认逐句流式（首包约 0.5-0.8 秒）")
 
 
 @app.post("/v1/speak", dependencies=[Depends(auth)])
@@ -411,10 +413,11 @@ async def speak(body: SpeakBody):
     """Convenience endpoint for agents/CLI: synthesize and play locally, return JSON."""
     vid = _pick_voice(body.voice)
     t0 = time.monotonic()
-    job = speech.start(body.text, vid, body.language, play=True, speed=body.speed)
+    job = speech.start(body.text, vid, body.language, play=True, speed=body.speed, streaming_mode=3 if body.low_latency else None)
     utt = job.utterance
     assert utt is not None
     started = await asyncio.to_thread(_wait_any, utt, 120.0)
+    latency_ms = int((time.monotonic() - t0) * 1000)  # request -> first audio handed to the device
     if job.error:
         raise EngineUnavailable(job.error, "synthesis_failed")
     if body.wait:
@@ -430,7 +433,7 @@ async def speak(body: SpeakBody):
         "started": started,
         "finished": utt.done.is_set(),
         "audio_seconds": seconds if job.done.is_set() else None,
-        "latency_ms": int((time.monotonic() - t0) * 1000),
+        "latency_ms": latency_ms if started else None,
     }
 
 
