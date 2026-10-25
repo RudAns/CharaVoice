@@ -26,7 +26,7 @@
 <body>
 <main>
 <h1>CharaVoice 技术实现说明</h1>
-<p class="muted">本地角色声音服务：GPT-SoVITS 合成与微调、sherpa-onnx 听写、素材流水线、Tauri 界面与 Agent 接口。本文只讲接入和复现所需的要点。</p>
+<p class="muted">本地角色声音服务：GPT-SoVITS / OmniVoice 合成与微调、sherpa-onnx 听写、声线调节与自然度后处理、素材流水线、Tauri 界面、Agent 接口与安装包。本文只讲接入和复现所需的要点。</p>
 
 <h2>1. 整体结构</h2>
 <svg viewBox="0 0 820 300" role="img" aria-label="进程结构">
@@ -72,11 +72,20 @@
   <li>每个声音的请求带自己的参考音频与参考文本；权重不同就先调 <code>/set_gpt_weights</code>、<code>/set_sovits_weights</code>（引擎会按文件自动识别版本）。</li>
   <li><code>POST /tts</code> 用 <code>streaming_mode=1</code>（逐句返回）：首包是只有头的 WAV，之后是裸 PCM，按 2 字节对齐切块，边收边播放。</li>
   <li>播放线程每 30ms 写一块、同时算电平推给界面，所以 Agent 通过接口说话时圆环也会动。</li>
+  <li>流式模式：1 = 逐句（音质最好）、2/3 = 按语义 token 分块（3 最快，首包约 0.2 秒）。HTTP 流式响应的客户端中途断开时，生成器的 <code>finally</code> 标记任务放弃，合成循环随即退出并 <code>aclose()</code> 引擎流，引擎锁立刻释放；否则下一个请求要排在被丢弃的合成后面，首包会多出约 1 秒。</li>
+  <li>可选引擎 OmniVoice（独立虚拟环境 + 自写的 <code>engine_scripts/omnivoice_server.py</code>，按句流式）。两个引擎不同时占显存：启动一个前先停另一个（切换约 15 秒）。</li>
 </ol>
 <div class="note">参考音频必须 3-10 秒（引擎在 TTS.py 里硬性检查）。参考文本为空时后端用 SenseVoice 自动转写。语种按文字自动判断：含假名为日语，含汉字为中文，否则英语。</div>
 
 <h2>3. 听写（听）</h2>
 <p>麦克风 16kHz → 每 30ms 一块送 Silero VAD（<code>is_speech_detected()</code> 的上升沿推 <code>speech_start</code>）→ VAD 弹出片段时推 <code>speech_end</code> → 独立线程用 SenseVoice 识别并推 <code>transcript</code>（文字、语种、情绪）。单次 <code>listen</code> 把间隔小于 <code>turn_silence</code>（默认 1.2 秒）的片段拼成一句再返回。角色说话时默认暂停听写，避免录进自己的声音。</p>
+
+<h3>全局听写</h3>
+<ul>
+  <li>Rust 用 <code>tauri-plugin-global-shortcut</code> 按候选列表注册第一个空闲的组合（Ctrl+Alt+Space 常被其他程序占用，依次退到 Ctrl+Shift+Space、Alt+Shift+D）。注册失败不能 panic，要在运行时逐个尝试。</li>
+  <li>听写小窗启动时就以隐藏状态建好（<code>focusable(false)</code>、置顶、透明），按键时只 <code>show()</code> 并发事件。窗口不可获得焦点，用户原来的输入框保持光标，第一次按键也不会因为加载网页漏掉开头的话。</li>
+  <li>后端听一轮：VAD 关闭片段时给出 <code>end_lag</code>（实际说完到现在的样本数），以“真正说完”的时刻起算 0.7 秒（可设置）结束；识别完用 <code>SendInput</code> + <code>KEYEVENTF_UNICODE</code> 逐字符输入，中日文不经过输入法。实测说完到出字 0.70-0.74 秒。</li>
+</ul>
 
 <h2>4. 素材流水线</h2>
 <svg viewBox="0 0 820 120" role="img" aria-label="素材流水线">
@@ -119,18 +128,54 @@
   <tr><td>进度</td><td>s2 解析 <code>====&gt; Epoch: N</code>；s1 解析 Lightning 的 <code>Epoch N: xx%</code>。中断用 <code>taskkill /T</code> 结束整个进程树（含 DataLoader 子进程）。</td></tr>
 </table>
 
-<h2>6. Agent 接口</h2>
+<h2>6. 声线调节与自然度</h2>
+<svg viewBox="0 0 820 130" role="img" aria-label="合成后处理链">
+  <g>
+    <rect class="box" x="5" y="30" width="120" height="60" rx="8"/><text class="lbl" x="17" y="55">按标点分句</text><text class="sub" x="17" y="74">逐句请求 cut0</text>
+    <rect class="box" x="145" y="30" width="110" height="60" rx="8"/><text class="lbl" x="157" y="55">去头尾静音</text><text class="sub" x="157" y="74">保留 0.25s 回看</text>
+    <rect class="box" x="275" y="30" width="125" height="60" rx="8"/><text class="lbl" x="287" y="55">声线 PSOLA</text><text class="sub" x="287" y="74">+ 倒谱包络处理</text>
+    <rect class="box" x="420" y="30" width="125" height="60" rx="8"/><text class="lbl" x="432" y="55">后处理（可选）</text><text class="sub" x="432" y="74">压缩 去齿音 响度</text>
+    <rect class="box" x="565" y="30" width="110" height="60" rx="8"/><text class="lbl" x="577" y="55">停顿 / 呼吸</text><text class="sub" x="577" y="74">按标点 ±15%</text>
+    <rect class="box" x="695" y="30" width="120" height="60" rx="8"/><text class="lbl" x="707" y="55">播放 / 流式返回</text><text class="sub" x="707" y="74">房间感 限幅</text>
+    <path class="arrow" d="M125 60 H145"/><path class="arrow" d="M255 60 H275"/><path class="arrow" d="M400 60 H420"/><path class="arrow" d="M545 60 H565"/><path class="arrow" d="M675 60 H695"/>
+  </g>
+</svg>
+<table>
+  <tr><th>环节</th><th>做法与实测</th></tr>
+  <tr><td>音高</td><td>自写 TD-PSOLA：基频用 pyworld 的 DIO + StoneMask，在约 16kHz 副本上算、<code>allowed_range=0.2</code>（默认值会把 15-45% 的有声帧判成无声，变调量明显不足），40ms 以内的无声空隙线性补齐；分析标记按 F0 周期放置，<strong>不要对齐波形峰值</strong>（对齐后预测 MOS 低 0.4）；输出按窗口和的 20ms 平滑值归一化，逐点除会把新的脉冲串抹平。每秒音频约 10ms。对比：WORLD 只做分析重合成 MOS 就从 3.54 降到 2.58，stftpitchshift 变调 MOS 1.39，Signalsmith 会连共振峰一起移。</td></tr>
+  <tr><td>年龄感 / 明亮度 / 气声</td><td>一次 STFT（约 32ms 帧，保留原相位）：对数幅度谱的低倒谱（1.5ms 以内）得到包络，除掉包络后按频率缩放包络再乘回（共振峰），叠加以 1kHz 为轴的倾斜（明亮度），1.5kHz 以上在语音帧加包络形状的噪声（气声）。±10% 共振峰 MOS 3.28/3.12（原声 3.54）。</td></tr>
+  <tr><td>流式</td><td><code>voicefx.Stream</code> 每次最多处理 1 秒，带 80ms 左上下文、40ms 预读，块间 10ms 交叉淡化；块处理在线程里逐个取出，首块额外延迟 5-18ms。</td></tr>
+  <tr><td>停顿</td><td>CharaVoice 自己按标点切句、逐句请求引擎（<code>text_split_method=cut0</code>），去掉引擎自带的头尾静音后按标点插入停顿（逗号 0.2s、句末 0.45s、省略号 0.5s、换段 0.8s，±15% 抖动，随语速缩放）；第一句不与后句合并，保证首包不变慢。</td></tr>
+  <tr><td>呼吸</td><td>从声音自己的素材里找无 F0、电平在语音下 12-40dB、150-500ms、其后 0.6s 内有语音的片段，按原始相对电平保存；插入在较长新句之前的停顿里。修剪过的朗读素材通常找不到。</td></tr>
+  <tr><td>后处理</td><td>5ms 块 RMS 压缩（2:1）、5-9kHz 动态去齿音、pyloudnorm 测响度到 -16 LUFS（首句定增益，之后缓慢跟随）、合成小房间脉冲响应（RT60 约 0.3s，湿声 -26dB）、-62dBFS 粉红底噪、软拐点限幅。用 UTMOS22 在同一批音频上逐项测：压缩 -0.08、响度 -0.04、混响 -0.10、底噪 -0.04，所以默认只开停顿和响度。</td></tr>
+</table>
+<div class="note">MOS 预测模型偏爱“干”声，混响、底噪、呼吸都会被它当成劣化；这类处理是否更像真人，要用盲听判断。</div>
+
+<h2>7. Agent 接口</h2>
 <table>
   <tr><th>接口</th><th>说明</th></tr>
   <tr><td><code>POST /v1/audio/speech</code></td><td>OpenAI 兼容；<code>model</code>/<code>voice</code> = 声音 id；<code>language</code>、<code>response_format</code>、<code>stream</code>、<code>play</code>（false 只返回音频）。非流式输出带 AudioSeal 水印和“AI 合成”元数据。</td></tr>
   <tr><td><code>POST /v1/speak</code></td><td>播放并返回 JSON；<code>wait=true</code> 等播完。</td></tr>
   <tr><td><code>POST /v1/audio/transcriptions</code></td><td>OpenAI 兼容转写，返回 text / language（verbose_json 带分段）。</td></tr>
   <tr><td><code>POST /v1/listen</code>、<code>WS /v1/listen</code></td><td>听一句；实时事件 speech_start / speech_end / transcript。</td></tr>
-  <tr><td>MCP（stdio）</td><td><code>speak(text, voice?, language?, wait?)</code>、<code>list_voices()</code>、<code>listen(timeout?)</code>；基于 MCP Python SDK 2.x 的 <code>MCPServer</code>（v1 的 FastMCP 已改名）。</td></tr>
+  <tr><td>MCP</td><td><code>speak</code>、<code>list_voices</code>、<code>listen</code>、<code>transcribe</code>；基于 MCP Python SDK 2.x 的 <code>MCPServer</code>。stdio 用 <code>charavoice-backend.exe mcp</code>；Streamable HTTP 挂在后端 <code>/mcp</code>：自己建 <code>StreamableHTTPSessionManager(app=server._lowlevel_server)</code>，在 FastAPI 的 lifespan 里 <code>async with manager.run()</code>，路由用一个检查口令后转给 <code>manager.handle_request</code> 的 ASGI 对象，并限定 Host/Origin 为本机（防 DNS 重绑定）。</td></tr>
+  <tr><td>按 Agent 分配声音</td><td>调用方名字依次取：环境变量 <code>CHARAVOICE_AGENT</code>、请求头 <code>X-CharaVoice-Agent</code>、MCP 握手里的 <code>client_params.client_info.name</code>。后端记到 <code>data/agents.json</code>，请求没指定 voice 时用绑定的声音和默认情绪。</td></tr>
+  <tr><td>口令</td><td>运行时口令每次启动重新生成（<code>data/runtime.json</code>）；另有长期有效的 Agent 口令（<code>data/agent_token</code>），给需要写进配置的 MCP HTTP / OpenAI 客户端用。</td></tr>
+  <tr><td>能力发现</td><td><code>GET /.well-known/charavoice.json</code> 列出接口、MCP 工具和可用参数。</td></tr>
 </table>
-<pre>claude mcp add charavoice -- "&lt;CharaVoice 目录&gt;\.venv\Scripts\charavoice-mcp.exe"</pre>
+<pre>claude mcp add --transport http charavoice http://127.0.0.1:9870/mcp --header "Authorization: Bearer &lt;Agent 口令&gt;"</pre>
 
-<h2>7. 踩过的问题</h2>
+<h2>8. 安装包与模型管理</h2>
+<ul>
+  <li>后端用 PyInstaller 冻结为单目录 <code>charavoice-backend.exe</code>（同一个 exe 是后端 <code>serve</code>、命令行和 stdio MCP），作为 Tauri 资源打进 NSIS 安装包（按用户安装，约 150MB）。<code>mcp</code> 包不要整体收集（<code>mcp.cli</code> 依赖 typer），只收 <code>mcp.server</code>、<code>mcp.shared</code>。</li>
+  <li>冻结后的后端默认数据目录是 <code>%LOCALAPPDATA%\io.github.rudans.charavoice</code>，和 Tauri 的 identifier 一致，所以命令行和 MCP 不需要任何配置就能找到运行中的后端。</li>
+  <li>模型与引擎在“模型”页下载：断点续传（Range）、进度事件、GPT-SoVITS 整合包用下载来的 <code>7zr.exe</code> 解压、OmniVoice 用下载来的 <code>uv</code> 建环境。删除只允许删除数据目录里的内容。</li>
+  <li>没有 ffmpeg 时，WAV/FLAC/OGG/MP3 用 soundfile 解码、scipy 重采样。</li>
+</ul>
+
+<h2>9. 踩过的问题</h2>
+
+
 <table>
   <tr><th>现象</th><th>原因与处理</th></tr>
   <tr><td>引擎日志乱码</td><td><code>python -I</code> 会忽略 <code>PYTHONIOENCODING</code>，子进程按系统 ANSI 代码页输出；读管道时用 <code>locale.getencoding()</code> 解码。</td></tr>
@@ -138,11 +183,15 @@
   <tr><td>两个窗口同时检测到后端退出，拉起两个后端</td><td>Rust 侧用异步互斥锁串行化 <code>backend_info</code>；后端发现端口已占用直接退出。</td></tr>
   <tr><td>热更新后 WebGL 退回静态图</td><td>组件卸载时不要 <code>loseContext()</code>，同一个 canvas 可能被复用；只释放缓冲区和程序。</td></tr>
   <tr><td>AudioSeal 报找不到 cl</td><td>0.2 版默认 <code>torch.compile</code>；设 <code>NO_TORCH_COMPILE=1</code> 走即时模式，4.7 秒音频嵌入约 0.16 秒（CPU）。</td></tr>
+  <tr><td>部分导出报“operands could not be broadcast”</td><td>水印在 16kHz 上生成再重采样回来，奇数长度会少 1 个样本；补齐到原长度。</td></tr>
+  <tr><td>读引擎流式 WAV 得到 0 帧</td><td>流式响应的 WAV 头里数据长度是 0，soundfile 照此读不到样本；跳过 44 字节头直接按 PCM 解析。</td></tr>
+  <tr><td>OmniVoice 的 instruct 和参考音频一起用效果不稳</td><td>实测“low pitch”反而升调、“whisper”无效；instruct 只用于不带参考的“文字设计声音”，生成后把选中的候选作为参考再克隆（相似度 0.74-0.84）。</td></tr>
+  <tr><td>Tauri 打包报“重分析点”（os error 4395）</td><td>在打包环境里 <code>%LOCALAPPDATA%\tauri\NSIS</code> 被文件虚拟化，删除重建失败；清掉该目录后重新 <code>tauri build</code>。</td></tr>
 </table>
 
-<h2>8. 接入自己的项目</h2>
+<h2>10. 接入自己的项目</h2>
 <ol>
-  <li>运行 <code>setup.bat</code> 装好环境、模型和引擎；只给 Agent 用可以直接 <code>start-backend.bat</code>。</li>
+  <li>装好 CharaVoice（安装包或 <code>setup.bat</code>），在“模型”页装好必需组件；只给 Agent 用可以直接运行后端。</li>
   <li>从 <code>data/runtime.json</code> 读 <code>base_url</code> 和 <code>token</code>，以 <code>Authorization: Bearer</code> 调用上面的接口；或者直接接 MCP。</li>
   <li>需要界面状态联动时订阅 <code>WS /v1/events?token=…</code>：<code>state</code>（idle/listening/thinking/speaking）、<code>level</code>（source=speak/mic，0-1）。</li>
   <li>只能用于本人或已获授权的声音；接口输出带水印，可用 <code>POST /v1/audio/watermark/detect</code> 检测。</li>
