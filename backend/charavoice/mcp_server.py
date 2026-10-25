@@ -1,14 +1,20 @@
-"""MCP server (stdio) exposing CharaVoice to agents: speak, list_voices, listen.
+"""MCP server exposing CharaVoice to agents: speak, list_voices, listen, transcribe.
 
 It is a thin client of the running CharaVoice backend, so the UI ring reacts to
-whatever the agent says or hears. Run with: python -m charavoice.mcp_server
+whatever the agent says or hears. Two transports: stdio (`charavoice-mcp`, or
+python -m charavoice.mcp_server) and Streamable HTTP at <backend>/mcp.
+
+Each agent is told apart by name so it can have its own voice: the CHARAVOICE_AGENT
+environment variable (stdio) or X-CharaVoice-Agent header (HTTP) if set, otherwise
+the client name the MCP client reports when it connects.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .client import ApiFailure, BackendDown, call, connect
@@ -26,6 +32,22 @@ server = MCPServer(
 )
 
 
+def _agent(ctx: Context | None) -> str | None:
+    if os.environ.get("CHARAVOICE_AGENT"):
+        return os.environ["CHARAVOICE_AGENT"]
+    if ctx is None:
+        return None
+    try:
+        h = ctx.headers or {}
+        if h.get("x-charavoice-agent"):
+            return h["x-charavoice-agent"]
+        params = ctx.session.client_params
+        info = getattr(params, "client_info", None) if params else None
+        return getattr(info, "name", None)
+    except Exception:  # no request context (e.g. called directly in tests)
+        return None
+
+
 def _guard(fn):
     try:
         return fn()
@@ -38,12 +60,16 @@ def _guard(fn):
                          "wait=true blocks until playback finishes. Audio streams sentence by sentence, so it starts in well under a second; "
                          "low_latency=true starts even sooner at slightly lower quality. "
                          "emotion: neutral / happy / angry / sad / surprised / fearful / gentle - uses the voice's reference clip "
-                         "tagged with that emotion (list_voices shows which ones each voice has); falls back to neutral.")
+                         "tagged with that emotion (list_voices shows which ones each voice has); falls back to neutral. "
+                         "Leave voice empty to use the voice the user assigned to you in CharaVoice.")
 def speak(text: str, voice: str | None = None, language: str | None = None, wait: bool = False, low_latency: bool = False,
-          emotion: str | None = None) -> str:
+          emotion: str | None = None, ctx: Context | None = None) -> str:
+    agent = _agent(ctx)
+
     def run():
         with connect(timeout=900) as c:
-            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language, "wait": wait, "low_latency": low_latency, "emotion": emotion}).json()
+            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language, "wait": wait, "low_latency": low_latency,
+                                                   "emotion": emotion, "agent": agent, "via": "mcp"}).json()
         state = "finished playing" if r["finished"] else "playing"
         secs = f", {r['audio_seconds']}s of audio" if r.get("audio_seconds") else ""
         lat = f", audio started after {r['latency_ms']} ms" if r.get("latency_ms") is not None else ""

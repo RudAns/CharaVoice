@@ -343,3 +343,9 @@ h3.first { margin-top: 0; }
 .hotkey-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 6px 0 12px; }
 .hotkey-line kbd { font: 600 13px/1 var(--mono, ui-monospace, Consolas, monospace); padding: 5px 9px; border-radius: 6px;
   background: var(--panel2); border: 1px solid var(--line); box-shadow: 0 1px 0 var(--line); }
+
+table.agents { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+table.agents th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 0 10px 8px 0; border-bottom: 1px solid var(--line); }
+table.agents td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.agents td .muted { font-size: 12px; margin-top: 2px; }
+table.agents select { min-width: 140px; }

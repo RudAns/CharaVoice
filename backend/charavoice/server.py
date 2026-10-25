@@ -1,8 +1,10 @@
 """CharaVoice HTTP / WebSocket API (FastAPI), bound to 127.0.0.1 only.
 
-Authentication: every /v1 route needs the token from data/runtime.json, sent as
-`Authorization: Bearer <token>` (works as an OpenAI api_key), the
-`X-CharaVoice-Token` header, or a `token` query parameter (for <img>/WebSocket).
+Authentication: every /v1 route needs the token from data/runtime.json (new on every start)
+or the long-lived agent token (data/agent_token, shown on the Integration page), sent as
+`Authorization: Bearer <token>` (works as an OpenAI api_key), the `X-CharaVoice-Token`
+header, or a `token` query parameter (for <img>/WebSocket). MCP is also served over
+Streamable HTTP at /mcp with the same tokens.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import APP_NAME, __version__, asr, audio_util, config, speech, voices
+from . import APP_NAME, __version__, agents, asr, audio_util, config, speech, voices
 from .engine import EngineUnavailable, engine
 from .events import bus
 from .player import player
@@ -50,7 +52,8 @@ async def lifespan(app: FastAPI):
     config.ensure_dirs()
     if config.load_settings()["engine"]["autostart"] and engine.installed():
         asyncio.create_task(engine.start())
-    yield
+    async with mcp_http.run():
+        yield
     player.stop_all()
     await engine.stop()
     config.clear_runtime(os.getpid())
@@ -88,8 +91,10 @@ async def _value_error(_: Request, e: ValueError):
 
 
 def _token_ok(given: str | None) -> bool:
-    expected = RUNTIME.get("token", "")
-    return bool(given) and bool(expected) and hmac.compare_digest(given, expected)
+    if not given:
+        return False
+    expected = [RUNTIME.get("token", ""), RUNTIME.get("agent_token", "")]
+    return any(e and hmac.compare_digest(given, e) for e in expected)
 
 
 def auth(request: Request, token: str | None = Query(default=None)) -> None:
@@ -355,6 +360,21 @@ class SpeechRequest(BaseModel):
     instructions: str | None = None
     streaming_mode: int | None = Field(default=None, ge=0, le=3, description="0 整段 / 1 逐句 / 2 流式 / 3 极速流式；省略按设置")
     emotion: str | None = Field(default=None, description="neutral / happy / angry / sad / surprised / fearful / gentle；用声音里带该标签的参考音频")
+    agent: str | None = Field(default=None, description="调用方名字；省略 voice 时用这个 Agent 绑定的声音（也可用 X-CharaVoice-Agent 头）")
+
+
+def _bound(request: Request, agent: str | None, via: str) -> tuple[str | None, str | None]:
+    """(voice id, emotion) bound to the calling agent, if it named itself and has a binding."""
+    a = agents.touch(agent or request.headers.get("x-charavoice-agent"), via)
+    if not a:
+        return None, None
+    vid = None
+    if a.get("voice"):
+        try:
+            vid = voices.find(a["voice"])["id"]
+        except LookupError:  # the bound voice was deleted: fall back to the default voice
+            vid = None
+    return vid, a.get("emotion")
 
 
 def _pick_voice(*candidates: str | None) -> str | None:
@@ -374,9 +394,11 @@ def _ai_headers(job: speech.SpeakJob) -> dict[str, str]:
 
 
 @app.post("/v1/audio/speech", dependencies=[Depends(auth)])
-async def audio_speech(body: SpeechRequest):
+async def audio_speech(body: SpeechRequest, request: Request):
     """OpenAI-compatible TTS. `model` or `voice` = CharaVoice voice id or name."""
-    vid = _pick_voice(body.voice, body.model)
+    bound_voice, bound_emotion = _bound(request, body.agent, "http")
+    vid = _pick_voice(body.voice, body.model) or bound_voice
+    body.emotion = body.emotion or bound_emotion
     streaming = body.stream or body.stream_format == "audio"
     fmt = (body.response_format or "wav").lower()
     if streaming and fmt not in ("wav", "pcm"):
@@ -415,12 +437,16 @@ class SpeakBody(BaseModel):
     wait: bool = Field(default=False, description="等到播放结束再返回")
     low_latency: bool = Field(default=False, description="极速流式：首包约 0.2 秒，音质略低；默认逐句流式（首包约 0.5-0.8 秒）")
     emotion: str | None = Field(default=None, description="neutral / happy / angry / sad / surprised / fearful / gentle")
+    agent: str | None = Field(default=None, description="调用方名字；省略 voice 时用这个 Agent 绑定的声音")
+    via: str = Field(default="http", description="接入方式（mcp / cli / http），只用于界面显示")
 
 
 @app.post("/v1/speak", dependencies=[Depends(auth)])
-async def speak(body: SpeakBody):
+async def speak(body: SpeakBody, request: Request):
     """Convenience endpoint for agents/CLI: synthesize and play locally, return JSON."""
-    vid = _pick_voice(body.voice)
+    bound_voice, bound_emotion = _bound(request, body.agent, body.via if body.via in ("mcp", "cli", "http") else "http")
+    vid = _pick_voice(body.voice) or bound_voice
+    body.emotion = body.emotion or bound_emotion
     t0 = time.monotonic()
     job = speech.start(body.text, vid, body.language, play=True, speed=body.speed, streaming_mode=3 if body.low_latency else None, emotion=body.emotion)
     utt = job.utterance
@@ -1055,7 +1081,9 @@ async def well_known():
             "voices": {"method": "GET", "path": "/v1/voices"},
             "openapi": {"method": "GET", "path": "/openapi.json"},
         },
-        "mcp": {"stdio": "charavoice-mcp", "tools": ["speak", "list_voices", "listen", "transcribe"]},
+        "mcp": {"stdio": "charavoice-mcp", "streamable_http": "/mcp", "tools": ["speak", "list_voices", "listen", "transcribe"]},
+        "agent_binding": {"header": "X-CharaVoice-Agent", "body_field": "agent", "mcp": "client name from initialize, or CHARAVOICE_AGENT",
+                          "note": "omit voice to speak with the voice the user bound to this agent"},
     }
 
 
@@ -1068,3 +1096,78 @@ async def dictation_toggle(type_into_focus: bool = True):
     """Start listening for one turn and type the result into the focused window; call again to cancel."""
     started = dictation.toggle(type_into_focus)
     return {"active": started}
+
+
+# ---------------------------------------------------------------- agents (P5)
+class AgentPatch(BaseModel):
+    voice: str | None = None
+    emotion: str | None = None
+
+
+@app.get("/v1/agents", dependencies=[Depends(auth)])
+async def list_agents():
+    return {"agents": agents.all_agents()}
+
+
+@app.patch("/v1/agents/{name}", dependencies=[Depends(auth)])
+async def patch_agent(name: str, body: AgentPatch):
+    patch = body.model_dump(exclude_unset=True)
+    if patch.get("voice"):
+        patch["voice"] = voices.find(patch["voice"])["id"]
+    if patch.get("emotion") and patch["emotion"] not in voices.EMOTIONS:
+        raise ApiError(400, f"未知情绪：{patch['emotion']}")
+    return agents.update(name, patch)
+
+
+@app.delete("/v1/agents/{name}", dependencies=[Depends(auth)])
+async def delete_agent(name: str):
+    agents.remove(name)
+    return {"deleted": True}
+
+
+@app.get("/v1/integration", dependencies=[Depends(auth)])
+async def integration():
+    base = RUNTIME.get("base_url", "http://127.0.0.1:9870")
+    return {"base_url": base, "mcp_url": base + "/mcp", "agent_token": RUNTIME.get("agent_token", "")}
+
+
+@app.post("/v1/integration/rotate-token", dependencies=[Depends(auth)])
+async def rotate_agent_token():
+    RUNTIME["agent_token"] = config.agent_token(rotate=True)
+    return await integration()
+
+
+# ---------------------------------------------------------------- MCP over Streamable HTTP (P5)
+class _McpHttp:
+    """Serve the MCP tools at /mcp on this backend (loopback only, same tokens as the API)."""
+
+    def __init__(self) -> None:
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        from .mcp_server import server as mcp_server
+
+        self.manager = StreamableHTTPSessionManager(
+            app=mcp_server._lowlevel_server,
+            security_settings=TransportSecuritySettings(
+                allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+                allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+            ),
+        )
+
+    def run(self):
+        return self.manager.run()
+
+    async def __call__(self, scope, receive, send):
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        h = headers.get("authorization", "")
+        bearer = h[7:].strip() if h.lower().startswith("bearer ") else None
+        if not (_token_ok(bearer) or _token_ok(headers.get("x-charavoice-token"))):
+            resp = _err(401, "缺少或错误的访问口令：在 MCP 配置里加上 Authorization: Bearer <Agent 口令>（见“接入 Agent”页）。", "unauthorized")
+            await resp(scope, receive, send)
+            return
+        await self.manager.handle_request(scope, receive, send)
+
+
+mcp_http = _McpHttp()
+app.router.add_route("/mcp", mcp_http, methods=["GET", "POST", "DELETE"], include_in_schema=False)

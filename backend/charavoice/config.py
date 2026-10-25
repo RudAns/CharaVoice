@@ -153,6 +153,21 @@ def write_runtime(port: int, pid: int) -> dict[str, Any]:
     return info
 
 
+AGENT_TOKEN_FILE = DATA_DIR / "agent_token"
+
+
+def agent_token(rotate: bool = False) -> str:
+    """Long-lived token for agent configs (MCP over HTTP, OpenAI clients); runtime tokens rotate per run."""
+    ensure_dirs()
+    if not rotate and AGENT_TOKEN_FILE.exists():
+        t = AGENT_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if t:
+            return t
+    t = "cv-" + secrets.token_urlsafe(24)
+    AGENT_TOKEN_FILE.write_text(t, encoding="utf-8")
+    return t
+
+
 def read_runtime() -> dict[str, Any] | None:
     try:
         return json.loads(RUNTIME_FILE.read_text(encoding="utf-8"))

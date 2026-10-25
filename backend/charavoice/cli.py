@@ -46,6 +46,7 @@ def cmd_serve(a) -> int:
     from . import server
 
     server.RUNTIME.update(config.write_runtime(port, os.getpid()))
+    server.RUNTIME["agent_token"] = config.agent_token()
     if a.parent_pid:
         procutil.watch_parent(a.parent_pid, lambda: os._exit(0))
     _out("CHARAVOICE_READY " + json.dumps({"base_url": server.RUNTIME["base_url"], "pid": os.getpid()}))
@@ -59,13 +60,14 @@ def cmd_speak(a) -> int:
     text = " ".join(a.text).strip() if a.text else sys.stdin.read().strip()
     with connect(timeout=900) as c:
         if a.out:
-            r = call(c, "POST", "/v1/audio/speech", json={"input": text, "voice": a.voice, "language": a.lang, "emotion": a.emotion,
+            r = call(c, "POST", "/v1/audio/speech", json={"input": text, "voice": a.voice, "language": a.lang, "emotion": a.emotion, "agent": a.agent,
                                                         "response_format": os.path.splitext(a.out)[1].lstrip(".") or "wav", "play": not a.no_play})
             with open(a.out, "wb") as f:
                 f.write(r.content)
             _out(f"已保存 {a.out}（声音 {r.headers.get('x-charavoice-voice')}）")
             return 0
-        r = call(c, "POST", "/v1/speak", json={"text": text, "voice": a.voice, "language": a.lang, "wait": not a.no_wait, "low_latency": a.fast, "emotion": a.emotion}).json()
+        r = call(c, "POST", "/v1/speak", json={"text": text, "voice": a.voice, "language": a.lang, "wait": not a.no_wait, "low_latency": a.fast, "emotion": a.emotion,
+                                               "agent": a.agent, "via": "cli"}).json()
         if a.json:
             _out(json.dumps(r, ensure_ascii=False))
         else:
@@ -147,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--no-wait", action="store_true", help="开始播放就返回，不等播完")
     s.add_argument("--fast", action="store_true", help="极速流式，首包更快、音质略低")
     s.add_argument("--emotion", "-e", help="neutral / happy / angry / sad / surprised / fearful / gentle")
+    s.add_argument("--agent", "-a", default=os.environ.get("CHARAVOICE_AGENT"),
+                   help="调用方名字：不指定 --voice 时用这个 Agent 在 CharaVoice 里绑定的声音（也可设环境变量 CHARAVOICE_AGENT）")
     s.add_argument("--out", "-o", help="保存为文件（wav/mp3/flac/opus）而不是只播放")
     s.add_argument("--no-play", action="store_true", help="配合 --out：只保存不播放")
     s.add_argument("--json", action="store_true")
