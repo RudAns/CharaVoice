@@ -96,6 +96,12 @@ class SpeakJob:
     live: asyncio.Queue | None = None
     tweak: voicefx.Tweak = field(default_factory=voicefx.Tweak)
     natural: dict = field(default_factory=lambda: dict(natural.OFF))
+    abandoned: bool = False  # the HTTP client went away: stop synthesizing so the engine is free
+
+    def stopped(self) -> bool:
+        if self.abandoned:
+            return True
+        return self.utterance is not None and self.utterance.cancelled and self.live is None
 
     def audio(self) -> np.ndarray:
         return np.concatenate(self.chunks) if self.chunks else np.zeros(0, dtype=np.int16)
@@ -167,7 +173,7 @@ async def _produce(job: SpeakJob) -> None:
     try:
         eng = engine_for(job.request.engine)
         for i, cl in enumerate(clauses):
-            if job.utterance is not None and job.utterance.cancelled and job.live is None:
+            if job.stopped():
                 break
             req = replace(job.request, text=cl.text, text_split="cut0") if cfg.get("pauses") else job.request
             trim = natural.Trimmer(1) if cfg.get("pauses") else None
@@ -188,16 +194,22 @@ async def _produce(job: SpeakJob) -> None:
                 while (blk := await asyncio.to_thread(next, it, None)) is not None:
                     await out(blk)
 
-            async for csr, pcm in eng.synthesize(req):
-                if job.utterance is not None and job.utterance.cancelled and job.live is None:
-                    break
-                if not sr:
-                    sr = csr
-                x = pcm.astype(np.float32) / 32768
-                if trim is not None:
-                    trim.sr = sr
-                    x = trim.feed(x)
-                await push(x)
+            stream = eng.synthesize(req)
+            try:
+                async for csr, pcm in stream:
+                    if job.stopped():
+                        break
+                    if not sr:
+                        sr = csr
+                    x = pcm.astype(np.float32) / 32768
+                    if trim is not None:
+                        trim.sr = sr
+                        x = trim.feed(x)
+                    await push(x)
+            finally:
+                await stream.aclose()  # closes the engine request and releases the engine at once
+            if job.stopped():
+                break
             if trim is not None:
                 await push(trim.flush())
             if fx is not None:

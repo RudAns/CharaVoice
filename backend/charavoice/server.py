@@ -464,11 +464,17 @@ async def audio_speech(body: SpeechRequest, request: Request):
 
         async def gen():
             first = True
-            async for sr, pcm in speech.stream(job):
-                if first and fmt == "wav":
-                    yield compliance.wav_stream_header(sr)
-                first = False
-                yield pcm.astype("<i2").tobytes()
+            finished = False
+            try:
+                async for sr, pcm in speech.stream(job):
+                    if first and fmt == "wav":
+                        yield compliance.wav_stream_header(sr)
+                    first = False
+                    yield pcm.astype("<i2").tobytes()
+                finished = True
+            finally:
+                if not finished:  # client disconnected mid-stream: free the engine for the next request
+                    job.abandoned = True
             if job.error:
                 log.warning("stream ended with error: %s", job.error)
 
