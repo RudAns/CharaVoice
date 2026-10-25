@@ -327,3 +327,19 @@ h3.first { margin-top: 0; }
 .emo-fearful { background: #1c2430; color: #cbd5e1; }
 .emo-gentle { background: #13282a; color: #a7f3d0; }
 .emo-pick, .emo-sel { padding: 4px 6px; font-size: 12.5px; }
+
+/* global dictation widget */
+.dict { position: fixed; inset: 14px 12px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-radius: 40px;
+  background: rgba(18, 22, 34, .92); border: 1px solid rgba(150, 170, 230, .25); box-shadow: 0 3px 10px rgba(0,0,0,.35); }
+.dict-orb { width: 34px; height: 34px; flex: none; border-radius: 50%; transition: transform .08s linear;
+  background: radial-gradient(circle at 38% 34%, #d9fff6, #2dd4bf 45%, #0e5d55 80%); box-shadow: 0 0 18px rgba(45, 212, 191, .6); }
+.dict-typing .dict-orb, .dict-done .dict-orb { background: radial-gradient(circle at 38% 34%, #fff, #a78bfa 45%, #4c3a8f 80%); box-shadow: 0 0 18px rgba(167, 139, 250, .6); }
+.dict-error .dict-orb { background: radial-gradient(circle at 38% 34%, #fff, #f87171 45%, #7f1d1d 80%); }
+.dict-body { flex: 1; min-width: 0; }
+.dict-label { font-size: 11.5px; color: #93a0bd; }
+.dict-text { font-size: 15px; color: #f2f4fa; white-space: nowrap; overflow: hidden; text-overflow: clip; }
+.dict-key { font-size: 11px; color: #6c7590; border: 1px solid #2e3650; border-radius: 6px; padding: 2px 6px; }
+
+.hotkey-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 6px 0 12px; }
+.hotkey-line kbd { font: 600 13px/1 var(--mono, ui-monospace, Consolas, monospace); padding: 5px 9px; border-radius: 6px;
+  background: var(--panel2); border: 1px solid var(--line); box-shadow: 0 1px 0 var(--line); }

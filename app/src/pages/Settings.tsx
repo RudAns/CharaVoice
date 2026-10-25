@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "preact/hooks";
 import { api, engine } from "../api";
 import { notify } from "../store";
@@ -16,10 +17,12 @@ export function Settings() {
   const [s, setS] = useState<any>(null);
   const [devs, setDevs] = useState<Device[]>([]);
   const [logs, setLogs] = useState<string[] | null>(null);
+  const [hotkey, setHotkey] = useState<string | null>(null);
 
   useEffect(() => {
     api("/v1/settings").then(setS);
     api<{ devices: Device[] }>("/v1/devices").then((r) => setDevs(r.devices)).catch(() => {});
+    invoke<string>("dictation_hotkey").then(setHotkey).catch(() => setHotkey(""));
   }, []);
 
   async function save(patch: any) {
@@ -110,6 +113,16 @@ export function Settings() {
           <span>说完判定：静音 {s.listen.min_silence.toFixed(2)} 秒</span>
           <input type="range" min="0.2" max="1.5" step="0.05" value={s.listen.min_silence} onChange={(e) => save({ listen: { min_silence: +(e.target as HTMLInputElement).value } })} />
         </label>
+        <div class="hotkey-line">
+          <span>全局听写快捷键</span>
+          {hotkey ? <kbd>{hotkeyLabel(hotkey)}</kbd> : <span class="muted">{hotkey === "" ? "全部候选组合都被其他程序占用" : "…"}</span>}
+          <span class="muted">在任何输入框里按下，说完一句话后文字会自动输入到光标处。</span>
+        </div>
+        <label class="field narrow">
+          <span>全局听写：说完 {(s.listen.dictation_end_silence ?? 0.7).toFixed(2)} 秒后自动输入</span>
+          <input type="range" min="0.3" max="2" step="0.05" value={s.listen.dictation_end_silence ?? 0.7} onChange={(e) => save({ listen: { dictation_end_silence: +(e.target as HTMLInputElement).value } })} />
+          <small class="muted">越短越快，但说话中间停顿稍长就会提前输入；不会短于上面的“说完判定”。</small>
+        </label>
         <label class="field narrow">
           <span>听写模型</span>
           <select value={s.listen.engine} onChange={(e) => save({ listen: { engine: (e.target as HTMLSelectElement).value } })}>
@@ -160,3 +173,5 @@ function OmniCard() {
     </>
   );
 }
+
+export const hotkeyLabel = (k: string) => k.split("+").map((p) => p[0].toUpperCase() + p.slice(1)).join(" + ");

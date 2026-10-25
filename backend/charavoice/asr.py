@@ -138,7 +138,10 @@ class Listener:
         self.source = "mic"
         self.error: str | None = None
         self._jobs: "queue.Queue[tuple[int, np.ndarray]]" = queue.Queue()
+        self._partial_q: "queue.Queue[tuple[int, np.ndarray]]" = queue.Queue(maxsize=1)
+        self._partial_seq = 0
         threading.Thread(target=self._recognize_loop, name="asr", daemon=True).start()
+        threading.Thread(target=self._partial_loop, name="asr-partial", daemon=True).start()
 
     @property
     def active(self) -> bool:
@@ -206,12 +209,22 @@ class Listener:
             buf = np.zeros(0, dtype=np.float32)
             in_speech = False
             muted = False
+            # partial results: re-recognise the utterance so far every PARTIAL_EVERY seconds
+            pre = np.zeros(0, dtype=np.float32)  # ~0.4 s pre-roll so the first word is not clipped
+            seg_pre = pre
+            hist = np.zeros(0, dtype=np.float32)  # audio fed to the VAD, long enough to cover a whole segment
+            hist_len = int(SR * (float(s["max_speech"]) + 2))
+            fed = 0  # samples fed to the VAD so far (VAD segment start indices count from here)
+            cur: list[np.ndarray] = []
+            since_partial = 0
+            partial_every = int(SR * float(s.get("partial_interval", 0.4)))
             for block in self._blocks():
                 if s["pause_while_speaking"] and player.busy:
                     if not muted:
                         muted = True
                         vad.reset()
                         buf = np.zeros(0, dtype=np.float32)
+                        hist, fed = np.zeros(0, dtype=np.float32), 0
                         if in_speech:
                             in_speech = False
                             bus.publish("speech_end", id=None, duration=0.0, discarded=True)
@@ -219,20 +232,41 @@ class Listener:
                 if muted:
                     muted = False
                 bus.publish("level", source="mic", level=round(level_of(block), 3))
+                if in_speech:
+                    cur.append(block)
+                    since_partial += len(block)
+                    if partial_every and since_partial >= partial_every:
+                        since_partial = 0
+                        self._post_partial(np.concatenate(cur))
+                else:
+                    pre = np.concatenate([pre, block])[-int(SR * 0.4):]
                 buf = np.concatenate([buf, block])
                 while len(buf) >= w:
                     vad.accept_waveform(buf[:w])
+                    hist = np.concatenate([hist, buf[:w]])[-hist_len:]
+                    fed += w
                     buf = buf[w:]
                     speaking_now = vad.is_speech_detected()
                     if speaking_now and not in_speech:
                         in_speech = True
+                        seg_pre = pre.copy()
+                        cur, since_partial = [seg_pre], 0
                         bus.publish("speech_start")
                     while not vad.empty():
-                        seg = np.array(vad.front.samples, dtype=np.float32)
+                        # VAD segments can start a little late; add up to 0.5 s of the audio just before
+                        # the segment start (exact sample index, so nothing is duplicated)
+                        st = int(vad.front.start)
+                        lo = max(st - int(SR * 0.5), fed - len(hist))
+                        pad = hist[lo - (fed - len(hist)) : max(lo, st) - (fed - len(hist))] if st > lo else hist[:0]
+                        seg = np.concatenate([pad, np.array(vad.front.samples, dtype=np.float32)])
+                        # how long ago the speech actually ended (the VAD needs min_silence to decide)
+                        end_lag = (fed - (st + len(vad.front.samples))) / SR
                         vad.pop()
                         in_speech = vad.is_speech_detected()
+                        cur, since_partial = ([pre.copy()] if in_speech else []), 0
+                        self._partial_seq += 1  # drop any partial still queued for this utterance
                         sid = next(self._ids)
-                        bus.publish("speech_end", id=sid, duration=round(len(seg) / SR, 2))
+                        bus.publish("speech_end", id=sid, duration=round(len(seg) / SR, 2), end_lag=round(end_lag, 3))
                         self._jobs.put((sid, seg))
         except RuntimeError as e:
             log.warning("listener stopped: %s", e)
@@ -248,11 +282,36 @@ class Listener:
             bus.publish("listen_stop")
             bus.leave(LISTENING)
 
+    def _post_partial(self, audio: np.ndarray) -> None:
+        item = (self._partial_seq, audio)
+        try:
+            self._partial_q.put_nowait(item)
+        except queue.Full:  # keep only the newest snapshot
+            try:
+                self._partial_q.get_nowait()
+            except queue.Empty:
+                pass
+            self._partial_q.put_nowait(item)
+
+    def _partial_loop(self) -> None:
+        while True:
+            seq, audio = self._partial_q.get()
+            if seq != self._partial_seq:
+                continue
+            try:
+                r = transcribe(audio)
+                if r["text"] and seq == self._partial_seq:
+                    bus.publish("partial", text=r["text"], language=r["language"], duration=r["duration"])
+            except Exception:
+                log.exception("partial recognition failed")
+
     def _recognize_loop(self) -> None:
         while True:
             sid, seg = self._jobs.get()
             try:
+                t0 = time.perf_counter()
                 r = transcribe(seg)
+                r["asr_ms"] = round((time.perf_counter() - t0) * 1000)
                 if r["text"]:
                     bus.publish("transcript", id=sid, **r)
                 else:

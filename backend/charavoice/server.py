@@ -599,7 +599,7 @@ def _ws_token_ok(ws: WebSocket) -> bool:
     return _token_ok(t) or _token_ok(ws.headers.get("x-charavoice-token"))
 
 
-LISTEN_EVENTS = {"speech_start", "speech_end", "transcript", "listen_start", "listen_stop", "listen_error"}
+LISTEN_EVENTS = {"speech_start", "partial", "speech_end", "transcript", "listen_start", "listen_stop", "listen_error"}
 
 
 @app.websocket("/v1/listen")
@@ -1029,3 +1029,42 @@ async def engines_stop(name: str):
         raise ApiError(404, f"没有这个引擎：{name}", "not_found")
     await e.stop()
     return e.info()
+
+
+# ---------------------------------------------------------------- capability discovery (P4)
+@app.get("/.well-known/charavoice.json")
+async def well_known():
+    """Unauthenticated discovery: what this local service can do and where (no voice data, no token)."""
+    from .engine import ENGINES
+
+    return {
+        "name": APP_NAME,
+        "version": __version__,
+        "description": "Local character voice service: text-to-speech in trained or zero-shot character voices, and speech-to-text.",
+        "auth": {"type": "bearer", "token_file": "data/runtime.json", "header": "Authorization: Bearer <token>"},
+        "languages": {"speak": ["zh", "en", "ja"], "listen": ["zh", "en", "ja", "ko", "yue"]},
+        "emotions": list(voices.EMOTIONS),
+        "engines": [{"name": e.name, "label": e.label, "installed": e.installed(), "state": e.state} for e in ENGINES.values()],
+        "endpoints": {
+            "speech_openai": {"method": "POST", "path": "/v1/audio/speech", "stream": True},
+            "transcriptions_openai": {"method": "POST", "path": "/v1/audio/transcriptions"},
+            "speak": {"method": "POST", "path": "/v1/speak"},
+            "listen_once": {"method": "POST", "path": "/v1/listen"},
+            "listen_stream": {"method": "WS", "path": "/v1/listen", "events": ["speech_start", "partial", "speech_end", "transcript"]},
+            "events": {"method": "WS", "path": "/v1/events"},
+            "voices": {"method": "GET", "path": "/v1/voices"},
+            "openapi": {"method": "GET", "path": "/openapi.json"},
+        },
+        "mcp": {"stdio": "charavoice-mcp", "tools": ["speak", "list_voices", "listen", "transcribe"]},
+    }
+
+
+# ---------------------------------------------------------------- global dictation (P4)
+from .dictation import dictation  # noqa: E402
+
+
+@app.post("/v1/dictation/toggle", dependencies=[Depends(auth)])
+async def dictation_toggle(type_into_focus: bool = True):
+    """Start listening for one turn and type the result into the focused window; call again to cancel."""
+    started = dictation.toggle(type_into_focus)
+    return {"active": started}

@@ -25,6 +25,17 @@ struct Backend {
     starting: tokio::sync::Mutex<()>,
 }
 
+/// Dictation hotkey candidates, tried in order at start-up.
+const DICTATION_HOTKEYS: &[&str] = &["ctrl+alt+space", "ctrl+shift+space", "alt+shift+d", "ctrl+alt+d"];
+
+#[derive(Default)]
+struct Hotkey(Mutex<String>);
+
+#[tauri::command]
+fn dictation_hotkey(app: AppHandle) -> String {
+    app.state::<Hotkey>().0.lock().unwrap().clone()
+}
+
 #[derive(Serialize, Clone)]
 struct BackendInfo {
     base_url: String,
@@ -175,6 +186,46 @@ fn restart_backend(app: AppHandle) -> Result<(), String> {
     spawn_backend(&app)
 }
 
+/// Global dictation hotkey: show the small non-focusable widget (the user's window keeps focus,
+/// so the recognised text is typed where the cursor is) and toggle a dictation turn.
+fn on_dictation_hotkey(app: &AppHandle) {
+    match app.get_webview_window("dictation") {
+        Some(w) => {
+            let _ = w.show();
+            let _ = w.emit("dictation-hotkey", ());
+        }
+        // Pre-creation failed at start-up: build it visible, it toggles itself once loaded.
+        None => build_dictation_window(app, true),
+    }
+}
+
+/// The widget is created hidden at start-up so the first hotkey press does not wait for a
+/// webview to load (speech that starts before the page subscribes would be missed).
+fn build_dictation_window(app: &AppHandle, visible: bool) {
+    let built = tauri::WebviewWindowBuilder::new(app, "dictation", tauri::WebviewUrl::App("index.html#dictation".into()))
+        .title("CharaVoice 听写")
+        .inner_size(420.0, 96.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(visible)
+        .focused(false)
+        .focusable(false)
+        .build();
+    if let Ok(w) = built {
+        if let Ok(Some(m)) = w.primary_monitor() {
+            let area = m.work_area();
+            let size = w.outer_size().unwrap_or_default();
+            let x = area.position.x + (area.size.width as i32 - size.width as i32) / 2;
+            let y = area.position.y + area.size.height as i32 - size.height as i32 - (60.0 * m.scale_factor()) as i32;
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    }
+}
+
 /// Open or close the frameless, always-on-top companion window (ring + avatar only).
 #[tauri::command]
 async fn toggle_companion(app: AppHandle) -> Result<bool, String> {
@@ -221,14 +272,36 @@ fn kill_backend(app: &AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        on_dictation_hotkey(app);
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .manage(Backend::default())
+        .manage(Hotkey::default())
+        .setup(|app| {
+            // Another program may already own a combination; take the first one that is free.
+            use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            for key in DICTATION_HOTKEYS {
+                if app.global_shortcut().register(*key).is_ok() {
+                    *app.state::<Hotkey>().0.lock().unwrap() = key.to_string();
+                    build_dictation_window(app.handle(), false);
+                    break;
+                }
+            }
+            Ok(())
+        })
         .on_window_event(|w, e| {
             if w.label() == "companion" && matches!(e, tauri::WindowEvent::Destroyed) {
                 let _ = w.app_handle().emit("companion", false);
             }
         })
-        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion])
+        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey])
         .build(tauri::generate_context!())
         .expect("error while building CharaVoice")
         .run(|app, event| {

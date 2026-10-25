@@ -72,6 +72,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "min_silence": 0.5,
         # A conversational turn ends after this much silence (one-shot listen joins segments).
         "turn_silence": 1.2,
+        # Global dictation types the text once this much silence follows the last word.
+        "dictation_end_silence": 0.7,
         "min_speech": 0.25,
         "max_speech": 20.0,
         "pause_while_speaking": True,

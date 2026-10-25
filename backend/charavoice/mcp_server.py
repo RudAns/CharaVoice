@@ -79,6 +79,31 @@ def listen(timeout: float = 15.0) -> dict:
     return _guard(run)
 
 
+AUDIO_EXT = {".wav", ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".webm", ".mp4", ".mkv", ".mov"}
+
+
+@server.tool(description="Transcribe an audio or video file on this computer to text (zh / en / ja / ko / yue, auto-detected). "
+                         "path: absolute path to the file. Returns text, language and per-segment timings.")
+def transcribe(path: str, language: str | None = None) -> dict:
+    from pathlib import Path
+
+    def run():
+        p = Path(path).expanduser()
+        if not p.is_file():
+            raise ToolError(f"File not found: {path}")
+        if p.suffix.lower() not in AUDIO_EXT:
+            raise ToolError(f"Not an audio/video file: {p.suffix}")
+        if p.stat().st_size > 512 * 1024 * 1024:
+            raise ToolError("File is larger than 512 MB.")
+        with connect(timeout=1800) as c, open(p, "rb") as f:
+            r = call(c, "POST", "/v1/audio/transcriptions", files={"file": (p.name, f)},
+                     data={"response_format": "verbose_json", "language": language or ""}).json()
+        return {"text": r["text"], "language": r["language"], "duration": r["duration"],
+                "segments": [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in r["segments"]]}
+
+    return _guard(run)
+
+
 def main() -> None:
     for stream in (sys.stderr,):
         if hasattr(stream, "reconfigure"):
