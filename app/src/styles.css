@@ -371,3 +371,8 @@ button.ghost { background: transparent; border-color: transparent; color: var(--
 .cand.on { border-color: var(--accent); }
 .cand audio { height: 32px; flex: 1; }
 .cand-n { font-size: 13px; min-width: 52px; }
+
+.nat-row { align-items: flex-start; gap: 10px; margin: 10px 0; }
+.nat-row span { display: flex; flex-direction: column; gap: 2px; }
+.nat-row small { font-size: 12px; }
+.breath-line { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 12px; }

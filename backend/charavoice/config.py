@@ -85,6 +85,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "vad_model": "models/asr/silero_vad.onnx",
     },
     "compliance": {"metadata_tag": True, "watermark": True},
+    # naturalness: punctuation pauses, breaths, dynamics, loudness, room (see natural.py)
+    "natural": {
+        "pauses": True, "comma": 0.2, "sentence": 0.45, "paragraph": 0.8, "jitter": 0.15,
+        "breaths": False, "breath_prob": 0.35,
+        "dynamics": False, "loudness": True, "target_lufs": -16.0,
+        "room": False, "room_tone_db": -62.0, "reverb_wet_db": -26.0, "rt60": 0.3,
+    },
 }
 
 _lock = threading.Lock()

@@ -58,7 +58,10 @@ def embed(pcm16: np.ndarray, sr: int) -> np.ndarray:
         wav = torch.from_numpy(x16).view(1, 1, -1)
         msg = torch.tensor([MESSAGE_BITS], dtype=torch.int32)
         wm = gen.get_watermark(wav, 16000, message=msg).view(-1).numpy()
-    out = x + _resample(wm, 16000, sr)[: len(x)]
+    w = _resample(wm, 16000, sr)[: len(x)]
+    if len(w) < len(x):  # resampling odd lengths can come back one sample short
+        w = np.pad(w, (0, len(x) - len(w)))
+    out = x + w
     return (np.clip(out, -1, 1) * 32767).astype(np.int16)
 
 

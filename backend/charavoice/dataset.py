@@ -426,11 +426,31 @@ def _quality(v16: np.ndarray, orig16: np.ndarray, other16: np.ndarray | None) ->
     else:
         snr, peak_db = 0.0, -99.0
     q = {"clipping": round(clip_ratio * 100, 3), "snr_db": round(snr, 1), "peak_db": round(peak_db, 1)}
+    q["f0_st"] = expressiveness(v16)
     if other16 is not None and len(other16):
         ve = float(np.mean(v16**2)) + 1e-12
         oe = float(np.mean(other16**2)) + 1e-12
         q["bgm_db"] = round(10 * np.log10(oe / ve), 1)  # accompaniment energy relative to voice
     return q
+
+
+def expressiveness(x16: np.ndarray) -> float | None:
+    """Pitch movement: standard deviation of F0 in semitones over voiced frames. Flat read speech is
+    around 2 st; lively conversational speech 3.5-5 st. Lively references give livelier synthesis."""
+    try:
+        import pyworld as pw
+    except ImportError:
+        return None
+    if len(x16) < 16000:
+        return None
+    xd = x16.astype(np.float64)
+    f0, t = pw.dio(xd, 16000, frame_period=10.0, f0_floor=60, f0_ceil=700)
+    f0 = pw.stonemask(xd, f0, t, 16000)
+    f = f0[f0 > 0]
+    if len(f) < 20:
+        return None
+    st = 12 * np.log2(f / np.median(f))
+    return round(float(np.std(np.clip(st, -12, 12))), 2)
 
 
 def _score(q: dict[str, Any], dur: float, has_text: bool) -> int:

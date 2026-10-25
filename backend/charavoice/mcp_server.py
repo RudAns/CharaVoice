@@ -64,17 +64,19 @@ def _guard(fn):
                          "Leave voice empty to use the voice the user assigned to you in CharaVoice. "
                          "Optional voice tweaks on top of the voice's saved settings: pitch (semitones -6..6, timbre kept), "
                          "formant (percent -20..20, + sounds younger / more feminine), brightness (dB -6..6), breath (0..1), "
-                         "or preset: sweet / deep / younger / mature.")
+                         "or preset: sweet / deep / younger / mature. "
+                         "naturalness: true (pauses by punctuation, breaths, loudness, light room) / false (plain output); default from settings.")
 def speak(text: str, voice: str | None = None, language: str | None = None, wait: bool = False, low_latency: bool = False,
           emotion: str | None = None, pitch: float | None = None, formant: float | None = None, brightness: float | None = None,
-          breath: float | None = None, preset: str | None = None, ctx: Context | None = None) -> str:
+          breath: float | None = None, preset: str | None = None, naturalness: bool | None = None, ctx: Context | None = None) -> str:
     agent = _agent(ctx)
 
     def run():
         with connect(timeout=900) as c:
             r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language, "wait": wait, "low_latency": low_latency,
                                                    "emotion": emotion, "agent": agent, "via": "mcp", "pitch": pitch, "formant": formant,
-                                                   "brightness": brightness, "breath": breath, "preset": preset}).json()
+                                                   "brightness": brightness, "breath": breath, "preset": preset,
+                                                   "naturalness": naturalness}).json()
         state = "finished playing" if r["finished"] else "playing"
         secs = f", {r['audio_seconds']}s of audio" if r.get("audio_seconds") else ""
         lat = f", audio started after {r['latency_ms']} ms" if r.get("latency_ms") is not None else ""

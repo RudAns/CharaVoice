@@ -22,6 +22,8 @@ dependencies = [
     "PyAudioWPatch>=0.2.12; sys_platform == 'win32'",
     "pyyaml>=6",
     "pyworld>=0.3.4",  # voice tweaks: DIO pitch marks for PSOLA (MIT, WORLD is modified BSD)
+    "scipy>=1.11",  # filters for the naturalness post chain (BSD)
+    "pyloudnorm>=0.1.1",  # BS.1770 loudness (MIT)
 ]
 
 [project.optional-dependencies]

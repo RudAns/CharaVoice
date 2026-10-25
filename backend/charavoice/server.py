@@ -52,6 +52,9 @@ async def lifespan(app: FastAPI):
     config.ensure_dirs()
     if config.load_settings()["engine"]["autostart"] and engine.installed():
         asyncio.create_task(engine.start())
+    from . import natural
+
+    asyncio.create_task(asyncio.to_thread(natural.prewarm))
     async with mcp_http.run():
         yield
     player.stop_all()
@@ -407,6 +410,7 @@ class SpeechRequest(BaseModel):
     brightness: float | None = Field(default=None, ge=-6, le=6, description="明亮 / 温暖（dB）")
     breath: float | None = Field(default=None, ge=0, le=1, description="气声 0-1")
     preset: str | None = Field(default=None, description="声线预设：sweet / deep / younger / mature")
+    naturalness: bool | str | dict | None = Field(default=None, description="自然度：true/\"on\" 自然模式，false/\"off\" 原始输出，或开关字典；省略按设置")
 
 
 def _tweak(body) -> dict:
@@ -454,7 +458,7 @@ async def audio_speech(body: SpeechRequest, request: Request):
     if streaming and fmt not in ("wav", "pcm"):
         raise ApiError(400, "流式输出只支持 response_format=wav 或 pcm。")
     job = speech.start(body.input, vid, body.language, play=body.play, speed=body.speed, live=streaming, streaming_mode=body.streaming_mode,
-                       emotion=body.emotion, tweak=_tweak(body), preset=body.preset)
+                       emotion=body.emotion, tweak=_tweak(body), preset=body.preset, naturalness=body.naturalness)
     if streaming:
         from . import compliance
 
@@ -495,6 +499,7 @@ class SpeakBody(BaseModel):
     brightness: float | None = Field(default=None, ge=-6, le=6, description="明亮 / 温暖（dB）")
     breath: float | None = Field(default=None, ge=0, le=1, description="气声 0-1")
     preset: str | None = Field(default=None, description="声线预设：sweet / deep / younger / mature")
+    naturalness: bool | str | dict | None = Field(default=None, description="自然度：true/\"on\" 自然模式，false/\"off\" 原始输出，或开关字典；省略按设置")
 
 
 @app.post("/v1/speak", dependencies=[Depends(auth)])
@@ -505,7 +510,7 @@ async def speak(body: SpeakBody, request: Request):
     body.emotion = body.emotion or bound_emotion
     t0 = time.monotonic()
     job = speech.start(body.text, vid, body.language, play=True, speed=body.speed, streaming_mode=3 if body.low_latency else None,
-                       emotion=body.emotion, tweak=_tweak(body), preset=body.preset)
+                       emotion=body.emotion, tweak=_tweak(body), preset=body.preset, naturalness=body.naturalness)
     utt = job.utterance
     assert utt is not None
     started = await asyncio.to_thread(_wait_any, utt, 120.0)
@@ -1139,6 +1144,7 @@ async def well_known():
             "openapi": {"method": "GET", "path": "/openapi.json"},
         },
         "mcp": {"stdio": "charavoice-mcp", "streamable_http": "/mcp", "tools": ["speak", "list_voices", "listen", "transcribe"]},
+        "naturalness": {"field": "naturalness", "values": ["on", "off", "{pauses, breaths, dynamics, loudness, room}"]},
         "voice_tweak": {"fields": ["pitch", "formant", "brightness", "breath", "preset"], "info": "/v1/voicefx"},
         "agent_binding": {"header": "X-CharaVoice-Agent", "body_field": "agent", "mcp": "client name from initialize, or CHARAVOICE_AGENT",
                           "note": "omit voice to speak with the voice the user bound to this agent"},
@@ -1237,3 +1243,27 @@ class _McpHttp:
 
 mcp_http = _McpHttp()
 app.router.add_route("/mcp", mcp_http, methods=["GET", "POST", "DELETE"], include_in_schema=False)
+
+
+# ---------------------------------------------------------------- breath library (naturalness)
+@app.get("/v1/voices/{vid}/breaths", dependencies=[Depends(auth)])
+async def get_breaths(vid: str):
+    from . import breaths
+
+    voices.get(vid)
+    return {"breaths": breaths.load(vid)}
+
+
+@app.post("/v1/voices/{vid}/breaths/build", dependencies=[Depends(auth)])
+async def build_breaths(vid: str):
+    """Scan this voice's material (imported sources and the reference) for inhalations."""
+    from . import breaths, dataset
+
+    v = voices.get(vid)
+    d = dataset.ddir(vid)
+    files = sorted((d / "sources").glob("*")) if (d / "sources").exists() else []
+    files += [Path(voices.abspath(v, r["audio"])) for r in v.get("refs") or []]
+    if v.get("ref"):
+        files.append(Path(voices.abspath(v, v["ref"]["audio"])))
+    idx = await asyncio.to_thread(breaths.build, vid, files)
+    return {"breaths": idx, "scanned": len(files)}

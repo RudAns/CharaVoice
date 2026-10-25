@@ -162,6 +162,10 @@ engines/ models/ data/  本地大文件与用户数据（不进版本库）
 | [3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++（sherpa-onnx 转换版） | 声纹相似度 | Apache-2.0 |
 | [AudioSeal](https://github.com/facebookresearch/audioseal) | 音频水印 | MIT（代码与权重） |
 | [PyTorch](https://pytorch.org/)（CPU 版） | AudioSeal 推理 | BSD-3-Clause |
+| [OmniVoice](https://github.com/k2-fsa/OmniVoice)（可选，`setup.bat --with-omnivoice` 安装） | 零样本引擎、文字设计声音 | 代码 Apache-2.0；权重许可以模型页为准 |
+| [pyworld](https://github.com/JeremyCCHsu/Python-Wrapper-for-World-Vocoder)（WORLD） | 声线调节的基频检测（DIO / StoneMask） | MIT（WORLD 为修改版 BSD） |
+| [SciPy](https://scipy.org/) | 自然度后处理链的滤波 | BSD-3-Clause |
+| [pyloudnorm](https://github.com/csteinmetz1/pyloudnorm) | 响度测量（ITU-R BS.1770） | MIT |
 | [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) | WASAPI 回环录音 | Apache-2.0（内含 PortAudio，MIT） |
 | [Tauri](https://tauri.app/) | 桌面外壳 | MIT / Apache-2.0 |
 | [FastAPI](https://fastapi.tiangolo.com/)、[Preact](https://preactjs.com/)、[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | 后端框架、界面框架、MCP 服务器 | MIT |

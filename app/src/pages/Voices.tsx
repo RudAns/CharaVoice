@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { api, EMOTION_LABEL, LANG_LABEL, url, type AvatarSlot, type Tweak, type Voice } from "../api";
 import { Showcase } from "../components/Showcase";
 import { notify, refreshVoices, select, selected, voices } from "../store";
@@ -134,6 +134,8 @@ function VoiceDetail({ v }: { v: Voice }) {
       <h3>声线调节</h3>
       <VoiceTweak key={v.id} v={v} />
 
+      <BreathLib key={`b-${v.id}`} v={v} />
+
       <h3>参考音频</h3>
       <div class="card">
         {v.ref ? (
@@ -200,7 +202,7 @@ function VoiceDetail({ v }: { v: Voice }) {
 }
 
 const TWEAK_SLIDERS: { key: keyof Tweak; label: string; min: number; max: number; step: number; fmt: (x: number) => string; hint: string }[] = [
-  { key: "pitch", label: "音高", min: -6, max: 6, step: 0.5, fmt: (x) => `${x > 0 ? "+" : ""}${x} 半音`, hint: "整体更高或更低，音色不变" },
+  { key: "pitch", label: "音高", min: -6, max: 6, step: 0.5, fmt: (x) => `${x > 0 ? "+" : ""}${x} 半音`, hint: "整体更高或更低，音色不变；幅度越大越不自然，建议 ±3 以内" },
   { key: "formant", label: "年龄感", min: -20, max: 20, step: 1, fmt: (x) => `${x > 0 ? "+" : ""}${x}%`, hint: "向右更年轻、偏女声；向左更成熟、偏男声" },
   { key: "brightness", label: "明亮度", min: -6, max: 6, step: 0.5, fmt: (x) => `${x > 0 ? "+" : ""}${x} dB`, hint: "向右更明亮清脆，向左更温暖厚实" },
   { key: "breath", label: "气声", min: 0, max: 1, step: 0.05, fmt: (x) => `${Math.round(x * 100)}%`, hint: "加一点气息感，适合温柔、亲近的角色" },
@@ -291,6 +293,37 @@ function VoiceTweak({ v }: { v: Voice }) {
         )}
         <span class="muted grow-text">在合成之后处理，不需要重新训练；Agent 调用时也可以临时传 pitch / formant / brightness / breath / preset。双击滑块回到 0。</span>
       </div>
+    </div>
+  );
+}
+
+function BreathLib({ v }: { v: Voice }) {
+  const [n, setN] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<{ breaths: unknown[] }>(`/v1/voices/${v.id}/breaths`).then((r) => setN(r.breaths.length)).catch(() => setN(0));
+  }, [v.id]);
+  async function build() {
+    setBusy(true);
+    try {
+      const r = await api<{ breaths: unknown[]; scanned: number }>(`/v1/voices/${v.id}/breaths/build`, { method: "POST" });
+      setN(r.breaths.length);
+      notify(r.breaths.length ? `从 ${r.scanned} 个素材里找到 ${r.breaths.length} 段呼吸` : `扫描了 ${r.scanned} 个素材，没有找到呼吸（修剪得很干净的录音里通常没有）`);
+    } catch (e: any) {
+      notify(e.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div class="card breath-line">
+      <span>
+        呼吸库：<strong>{n ?? "…"}</strong> 段
+      </span>
+      <span class="muted grow-text">自然模式会在较长的新句子前偶尔插入这个声音自己的呼吸。素材越像日常说话（不是修剪过的朗读），越容易找到。</span>
+      <button disabled={busy} onClick={build}>
+        {busy ? "正在扫描…" : "从素材提取"}
+      </button>
     </div>
   );
 }

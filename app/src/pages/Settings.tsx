@@ -132,6 +132,8 @@ export function Settings() {
         </label>
       </div>
 
+      <NaturalCard s={s} save={save} />
+
       <h3>合规</h3>
       <div class="card">
         <label class="check">
@@ -144,6 +146,63 @@ export function Settings() {
         </label>
       </div>
     </div>
+  );
+}
+
+const NAT_SWITCHES: { key: string; label: string; hint: string }[] = [
+  { key: "pauses", label: "按标点停顿", hint: "逗号、句号、省略号、换段停顿长短不同，并带一点随机变化，不再每句都停一样长" },
+  { key: "breaths", label: "呼吸声", hint: "在较长的新句子前偶尔加一口轻呼吸；只用这个声音自己素材里提取的呼吸（声音库里可提取）" },
+  { key: "dynamics", label: "动态与去齿音", hint: "轻度压缩让音量更稳，齿音（s、sh）过重时自动压低" },
+  { key: "loudness", label: "响度统一", hint: "统一到约 -16 LUFS，不同声音、不同句子音量一致" },
+  { key: "room", label: "房间感", hint: "极轻的小房间混响和底噪，让声音不那么“干”，停顿不是绝对静音" },
+];
+
+function NaturalCard({ s, save }: { s: any; save: (p: any) => void }) {
+  const n = s.natural ?? {};
+  const allOn = NAT_SWITCHES.every((x) => n[x.key]);
+  const allOff = NAT_SWITCHES.every((x) => !n[x.key]);
+  const setAll = (v: boolean) => save({ natural: Object.fromEntries(NAT_SWITCHES.map((x) => [x.key, v])) });
+  const REC: Record<string, boolean> = { pauses: true, breaths: false, dynamics: false, loudness: true, room: false };
+  const isRec = NAT_SWITCHES.every((x) => !!n[x.key] === REC[x.key]);
+  return (
+    <>
+      <h3>自然度</h3>
+      <div class="card">
+        <div class="btn-row">
+          <button class={`pchip ${isRec ? "on" : ""}`} onClick={() => save({ natural: REC })}>
+            推荐
+          </button>
+          <button class={`pchip ${allOn ? "on" : ""}`} onClick={() => setAll(true)}>
+            自然模式（全开）
+          </button>
+          <button class={`pchip ${allOff ? "on" : ""}`} onClick={() => setAll(false)}>
+            原始输出
+          </button>
+          <span class="muted grow-text">减少 AI 语音的机械感。“推荐”只开停顿和响度（客观评分不降）；全开会更有空间感和呼吸感，是否更好请以自己的听感为准。Agent 调用时可传 naturalness=true / false。</span>
+        </div>
+        {NAT_SWITCHES.map((x) => (
+          <label class="check nat-row">
+            <input type="checkbox" checked={!!n[x.key]} onChange={(e) => save({ natural: { [x.key]: (e.target as HTMLInputElement).checked } })} />
+            <span>
+              <strong>{x.label}</strong>
+              <small class="muted">{x.hint}</small>
+            </span>
+          </label>
+        ))}
+        {n.pauses && (
+          <div class="field-row">
+            <label class="field">
+              <span>逗号停顿 {Number(n.comma ?? 0.2).toFixed(2)} 秒</span>
+              <input type="range" min="0.08" max="0.5" step="0.01" value={n.comma ?? 0.2} onChange={(e) => save({ natural: { comma: +(e.target as HTMLInputElement).value } })} />
+            </label>
+            <label class="field">
+              <span>句末停顿 {Number(n.sentence ?? 0.45).toFixed(2)} 秒</span>
+              <input type="range" min="0.2" max="1.0" step="0.01" value={n.sentence ?? 0.45} onChange={(e) => save({ natural: { sentence: +(e.target as HTMLInputElement).value } })} />
+            </label>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

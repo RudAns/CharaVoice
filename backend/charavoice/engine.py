@@ -68,6 +68,8 @@ class SynthRequest:
     top_k: int = 15
     top_p: float = 1.0
     temperature: float = 1.0
+    repetition_penalty: float = 1.35
+    text_split: str = "cut5"  # "cut0" when CharaVoice already split the text into clauses
 
 
 def _port_free(port: int) -> bool:
@@ -234,7 +236,8 @@ class Engine:
         return {
             "text": req.text, "text_lang": req.text_lang, "ref_audio_path": req.ref_audio,
             "aux_ref_audio_paths": req.aux_refs or [], "prompt_text": req.prompt_text, "prompt_lang": req.prompt_lang,
-            "top_k": req.top_k, "top_p": req.top_p, "temperature": req.temperature, "text_split_method": "cut5",
+            "top_k": req.top_k, "top_p": req.top_p, "temperature": req.temperature, "text_split_method": req.text_split,
+            "repetition_penalty": req.repetition_penalty, "fragment_interval": 0.3 if req.text_split != "cut0" else 0.05,
             "batch_size": 1, "speed_factor": req.speed, "seed": req.seed, "media_type": "wav",
             "streaming_mode": int(req.streaming_mode), "parallel_infer": True,
             "use_cuda_graph": bool(self.settings.get("use_cuda_graph", True)),

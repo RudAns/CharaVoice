@@ -15,7 +15,7 @@ interface Item {
   asr_text: string;
   lang: string;
   emotion: string;
-  quality: { clipping: number; snr_db: number; peak_db: number; bgm_db?: number };
+  quality: { clipping: number; snr_db: number; peak_db: number; bgm_db?: number; f0_st?: number | null };
   score: number;
   similarity: number | null;
   deleted: boolean;
@@ -314,6 +314,15 @@ export function Material() {
                   <span class={`badge ${i.similarity === null ? "" : i.similarity >= 0.6 ? "good" : i.similarity >= 0.4 ? "mid" : "bad"}`} title="与目标说话人的声纹相似度">
                     声纹 {i.similarity === null ? "—" : i.similarity.toFixed(2)}
                   </span>
+                  {i.quality.f0_st != null && (
+                    <span
+                      class={`badge ${i.quality.f0_st >= 3.5 ? "good" : i.quality.f0_st >= 2.5 ? "mid" : ""}`}
+                      title="语调起伏（基频标准差，半音）。起伏大、又清晰的片段做参考音频，合成出来更自然；平板的朗读片段容易让合成也平板。"
+                    >
+                      起伏 {i.quality.f0_st.toFixed(1)}
+                      {i.quality.f0_st >= 3.5 && i.score >= 70 && i.duration >= 3 && i.duration <= 10 ? " · 推荐作参考" : ""}
+                    </span>
+                  )}
                   <button
                     class="small"
                     disabled={i.duration < 3}

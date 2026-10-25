@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import AsyncIterator
 
 import numpy as np
 
-from . import config, voicefx, voices
+from . import breaths, config, natural, voicefx, voices
 from .engine import EngineUnavailable, SynthRequest, engine, engine_for
 from .player import Utterance, player
 
@@ -94,6 +95,7 @@ class SpeakJob:
     done: asyncio.Event = field(default_factory=asyncio.Event)
     live: asyncio.Queue | None = None
     tweak: voicefx.Tweak = field(default_factory=voicefx.Tweak)
+    natural: dict = field(default_factory=lambda: dict(natural.OFF))
 
     def audio(self) -> np.ndarray:
         return np.concatenate(self.chunks) if self.chunks else np.zeros(0, dtype=np.int16)
@@ -114,22 +116,111 @@ def _to_pcm(x: np.ndarray) -> np.ndarray:
     return (np.clip(x, -1, 1) * 32767).astype(np.int16)
 
 
+_BREATH_CACHE: dict[tuple[str, str], np.ndarray] = {}
+
+
+def _breath(job: SpeakJob, sr: int, speech_db: float, rng: random.Random) -> np.ndarray | None:
+    """A breath clip from the voice's library, scaled to the speaker's breath-to-speech level."""
+    lib = breaths.load(job.voice["id"])
+    if not lib:
+        return None
+    b = rng.choice(lib)
+    key = (job.voice["id"], b["file"])
+    if key not in _BREATH_CACHE:
+        import soundfile as sf
+
+        x, bsr = sf.read(str(breaths.lib_dir(job.voice["id"]) / b["file"]), dtype="float32")
+        _BREATH_CACHE[key] = x if bsr == sr else np.interp(np.arange(int(len(x) * sr / bsr)) * bsr / sr, np.arange(len(x)), x).astype(np.float32)
+    x = _BREATH_CACHE[key]
+    x = x[: int(sr * 0.35)]  # 200-350 ms is the natural length; longer clips are cut
+    lvl = 20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-9)
+    rel = float(np.clip(b.get("rel_db", -26), -34, -18)) - 3  # a little quieter than measured: restraint
+    return (x * 10 ** ((speech_db + rel - lvl) / 20)).astype(np.float32)
+
+
+def _level_db(x: np.ndarray, sr: int) -> float:
+    blk = max(1, sr // 100)
+    n = len(x) // blk * blk
+    if not n:
+        return -40.0
+    r = np.sqrt(np.mean(x[:n].reshape(-1, blk) ** 2, 1) + 1e-12)
+    return float(20 * np.log10(np.percentile(r, 95)))
+
+
 async def _produce(job: SpeakJob) -> None:
-    fx: voicefx.Stream | None = None
+    cfg = job.natural
+    rng = random.Random()
+    clauses = natural.plan(job.text, cfg, job.request.speed, rng) if cfg.get("pauses") else [natural.Clause(job.text, 0.0, True)]
+    post: natural.Post | None = None
+    sr = 0
+    speech_db = -20.0
+
+    async def out(x: np.ndarray, silent: bool = False) -> None:
+        nonlocal post
+        if not len(x):
+            return
+        if natural.any_post(cfg):
+            post = post or natural.Post(sr, cfg)
+            x = await asyncio.to_thread(post.process, x, silent)
+        await _emit(job, sr, _to_pcm(x))
+
     try:
-        async for sr, pcm in engine_for(job.request.engine).synthesize(job.request):
+        eng = engine_for(job.request.engine)
+        for i, cl in enumerate(clauses):
             if job.utterance is not None and job.utterance.cancelled and job.live is None:
                 break
-            if not job.tweak.active:
-                await _emit(job, sr, pcm)
-                continue
-            # voice tweaks: process block by block off the event loop, so the first block plays early
-            fx = fx or voicefx.Stream(sr, job.tweak)
-            it = fx.feed(pcm.astype(np.float32) / 32768)
-            while (blk := await asyncio.to_thread(next, it, None)) is not None:
-                await _emit(job, sr, _to_pcm(blk))
-        if fx is not None:
-            await _emit(job, fx.sr, _to_pcm(await asyncio.to_thread(fx.flush)))
+            req = replace(job.request, text=cl.text, text_split="cut0") if cfg.get("pauses") else job.request
+            trim = natural.Trimmer(1) if cfg.get("pauses") else None
+            fx: voicefx.Stream | None = None
+            clause_audio: list[np.ndarray] = []
+
+            async def push(x: np.ndarray) -> None:
+                nonlocal fx
+                if not len(x):
+                    return
+                clause_audio.append(x)
+                if not job.tweak.active:
+                    await out(x)
+                    return
+                # voice tweaks: block by block off the event loop, so the first block plays early
+                fx = fx or voicefx.Stream(sr, job.tweak)
+                it = fx.feed(x)
+                while (blk := await asyncio.to_thread(next, it, None)) is not None:
+                    await out(blk)
+
+            async for csr, pcm in eng.synthesize(req):
+                if job.utterance is not None and job.utterance.cancelled and job.live is None:
+                    break
+                if not sr:
+                    sr = csr
+                x = pcm.astype(np.float32) / 32768
+                if trim is not None:
+                    trim.sr = sr
+                    x = trim.feed(x)
+                await push(x)
+            if trim is not None:
+                await push(trim.flush())
+            if fx is not None:
+                await out(await asyncio.to_thread(fx.flush))
+            if clause_audio:
+                speech_db = _level_db(np.concatenate(clause_audio), sr)
+            # the pause after this clause, with a breath before a long new sentence now and then
+            if cl.pause > 0 and sr:
+                gap = np.zeros(int(sr * cl.pause), np.float32)
+                nxt = clauses[i + 1] if i + 1 < len(clauses) else None
+                long_next = nxt is not None and nxt.sentence_start and (
+                    len(re.findall(r"[\u3400-\u9fff]", nxt.text)) >= 12 or len(nxt.text.split()) >= 8)
+                if cfg.get("breaths") and long_next and cl.pause >= cfg["sentence"] * 0.8 and rng.random() < float(cfg["breath_prob"]):
+                    b = _breath(job, sr, speech_db, rng)
+                    if b is not None:
+                        lead = max(int(sr * 0.06), len(gap) - len(b) - int(sr * 0.08))
+                        gap = np.zeros(lead + len(b) + int(sr * 0.08), np.float32)
+                        gap[lead: lead + len(b)] = b
+                await out(gap, silent=True)
+        if post is not None and sr:
+            t = await asyncio.to_thread(post.tail_out)
+            if len(t):
+                await _emit(job, sr, _to_pcm(t))
     except EngineUnavailable as e:
         job.error = str(e)
     except Exception as e:  # surface anything else as a clean message
@@ -144,7 +235,8 @@ async def _produce(job: SpeakJob) -> None:
 
 def start(text: str, voice: str | None = None, language: str | None = None, play: bool | None = None,
           speed: float | None = None, live: bool = False, streaming_mode: int | None = None,
-          emotion: str | None = None, tweak: dict | None = None, preset: str | None = None) -> SpeakJob:
+          emotion: str | None = None, tweak: dict | None = None, preset: str | None = None,
+          naturalness: bool | str | dict | None = None) -> SpeakJob:
     """Begin synthesis (and playback). Raises LookupError/ValueError for bad input.
 
     tweak / preset adjust the voice on top of its saved defaults (see voicefx)."""
@@ -156,9 +248,10 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
     v = voices.find(voice)
     req = build_request(v, text, language, speed, streaming_mode, emotion)
     tw = voicefx.resolve(v.get("tweak"), preset, tweak)
+    nat = natural.resolve(config.load_settings().get("natural"), naturalness)
     if play is None:
         play = bool(config.load_settings()["speech"]["play_locally"])
-    job = SpeakJob(voice=v, text=text, request=req, play=play, live=asyncio.Queue() if live else None, tweak=tw)
+    job = SpeakJob(voice=v, text=text, request=req, play=play, live=asyncio.Queue() if live else None, tweak=tw, natural=nat)
     if play:
         job.utterance = player.enqueue(Utterance(voice=v["id"], text=text))
     asyncio.create_task(_produce(job))

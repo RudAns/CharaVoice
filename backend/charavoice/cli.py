@@ -55,7 +55,8 @@ def cmd_serve(a) -> int:
 
 
 def _tweak_args(a) -> dict:
-    d = {"pitch": a.pitch, "formant": a.formant, "brightness": a.bright, "breath": a.breath, "preset": a.preset}
+    d = {"pitch": a.pitch, "formant": a.formant, "brightness": a.bright, "breath": a.breath, "preset": a.preset,
+         "naturalness": {"on": True, "off": False}.get(a.natural)}
     return {k: v for k, v in d.items() if v is not None}
 
 
@@ -161,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--bright", type=float, help="明亮（正）/ 温暖（负），dB（-6 到 6）")
     s.add_argument("--breath", type=float, help="气声 0 到 1")
     s.add_argument("--preset", choices=["sweet", "deep", "younger", "mature"], help="声线预设")
+    s.add_argument("--natural", choices=["on", "off"], help="自然模式（按标点停顿、呼吸、响度、房间感）开或关；省略按设置")
     s.add_argument("--out", "-o", help="保存为文件（wav/mp3/flac/opus）而不是只播放")
     s.add_argument("--no-play", action="store_true", help="配合 --out：只保存不播放")
     s.add_argument("--json", action="store_true")
