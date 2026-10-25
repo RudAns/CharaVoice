@@ -54,20 +54,25 @@ def cmd_serve(a) -> int:
     return 0
 
 
+def _tweak_args(a) -> dict:
+    d = {"pitch": a.pitch, "formant": a.formant, "brightness": a.bright, "breath": a.breath, "preset": a.preset}
+    return {k: v for k, v in d.items() if v is not None}
+
+
 def cmd_speak(a) -> int:
     from .client import call, connect
 
     text = " ".join(a.text).strip() if a.text else sys.stdin.read().strip()
     with connect(timeout=900) as c:
         if a.out:
-            r = call(c, "POST", "/v1/audio/speech", json={"input": text, "voice": a.voice, "language": a.lang, "emotion": a.emotion, "agent": a.agent,
+            r = call(c, "POST", "/v1/audio/speech", json={"input": text, "voice": a.voice, "language": a.lang, "emotion": a.emotion, "agent": a.agent, **_tweak_args(a),
                                                         "response_format": os.path.splitext(a.out)[1].lstrip(".") or "wav", "play": not a.no_play})
             with open(a.out, "wb") as f:
                 f.write(r.content)
             _out(f"已保存 {a.out}（声音 {r.headers.get('x-charavoice-voice')}）")
             return 0
         r = call(c, "POST", "/v1/speak", json={"text": text, "voice": a.voice, "language": a.lang, "wait": not a.no_wait, "low_latency": a.fast, "emotion": a.emotion,
-                                               "agent": a.agent, "via": "cli"}).json()
+                                               "agent": a.agent, "via": "cli", **_tweak_args(a)}).json()
         if a.json:
             _out(json.dumps(r, ensure_ascii=False))
         else:
@@ -151,6 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--emotion", "-e", help="neutral / happy / angry / sad / surprised / fearful / gentle")
     s.add_argument("--agent", "-a", default=os.environ.get("CHARAVOICE_AGENT"),
                    help="调用方名字：不指定 --voice 时用这个 Agent 在 CharaVoice 里绑定的声音（也可设环境变量 CHARAVOICE_AGENT）")
+    s.add_argument("--pitch", type=float, help="音高，半音（-6 到 6），音色不变")
+    s.add_argument("--formant", type=float, help="共振峰 / 年龄感，%%（-20 到 20），正值更年轻")
+    s.add_argument("--bright", type=float, help="明亮（正）/ 温暖（负），dB（-6 到 6）")
+    s.add_argument("--breath", type=float, help="气声 0 到 1")
+    s.add_argument("--preset", choices=["sweet", "deep", "younger", "mature"], help="声线预设")
     s.add_argument("--out", "-o", help="保存为文件（wav/mp3/flac/opus）而不是只播放")
     s.add_argument("--no-play", action="store_true", help="配合 --out：只保存不播放")
     s.add_argument("--json", action="store_true")

@@ -27,9 +27,17 @@ export interface Voice {
   refs?: { id: string; text: string; lang: string; duration: number; emotion: string; url: string }[];
   emotions?: string[];
   params: Record<string, number>;
+  tweak: Tweak;
   avatar: Record<AvatarSlot, { url: string; kind: "image" | "video" } | null>;
   avatar_mode?: "circle" | "free";
   created_at: string;
+}
+
+export interface Tweak {
+  pitch: number;
+  formant: number;
+  brightness: number;
+  breath: number;
 }
 
 interface BackendInfo {

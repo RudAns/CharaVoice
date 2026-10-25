@@ -14,6 +14,7 @@ GET /health
 import argparse
 import io
 import os
+import traceback
 import re
 import threading
 import wave
@@ -90,7 +91,7 @@ def gen(req: TTSReq, piece: str) -> np.ndarray:
           "generation_config": OmniVoiceGenerationConfig(num_step=max(4, min(64, req.steps)))}
     if req.ref_audio:
         kw["voice_clone_prompt"] = prompt_for(req.ref_audio, req.ref_text)
-    elif req.instruct:
+    if req.instruct:  # voice design attributes; combined with a reference they steer the cloned voice
         kw["instruct"] = req.instruct
     with lock, torch.inference_mode():
         audio = model.generate(**kw)[0]
@@ -112,7 +113,11 @@ def tts(req: TTSReq):
         def stream():
             yield header(SR)
             for i, p in enumerate(pieces):
-                pcm = gen(req, p)
+                try:
+                    pcm = gen(req, p)
+                except Exception:  # the response has started; log and end it short
+                    traceback.print_exc()
+                    return
                 if i:
                     yield np.zeros(int(SR * 0.12), "<i2").tobytes()  # short pause between sentences
                 yield pcm.tobytes()

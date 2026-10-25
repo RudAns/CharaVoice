@@ -9,7 +9,7 @@ from typing import AsyncIterator
 
 import numpy as np
 
-from . import config, voices
+from . import config, voicefx, voices
 from .engine import EngineUnavailable, SynthRequest, engine, engine_for
 from .player import Utterance, player
 
@@ -93,22 +93,43 @@ class SpeakJob:
     error: str | None = None
     done: asyncio.Event = field(default_factory=asyncio.Event)
     live: asyncio.Queue | None = None
+    tweak: voicefx.Tweak = field(default_factory=voicefx.Tweak)
 
     def audio(self) -> np.ndarray:
         return np.concatenate(self.chunks) if self.chunks else np.zeros(0, dtype=np.int16)
 
 
+async def _emit(job: SpeakJob, sr: int, pcm: np.ndarray) -> None:
+    if not len(pcm):
+        return
+    job.sr = sr
+    job.chunks.append(pcm)
+    if job.utterance is not None:
+        job.utterance.feed(sr, pcm)
+    if job.live is not None:
+        await job.live.put((sr, pcm))
+
+
+def _to_pcm(x: np.ndarray) -> np.ndarray:
+    return (np.clip(x, -1, 1) * 32767).astype(np.int16)
+
+
 async def _produce(job: SpeakJob) -> None:
+    fx: voicefx.Stream | None = None
     try:
         async for sr, pcm in engine_for(job.request.engine).synthesize(job.request):
             if job.utterance is not None and job.utterance.cancelled and job.live is None:
                 break
-            job.sr = sr
-            job.chunks.append(pcm)
-            if job.utterance is not None:
-                job.utterance.feed(sr, pcm)
-            if job.live is not None:
-                await job.live.put((sr, pcm))
+            if not job.tweak.active:
+                await _emit(job, sr, pcm)
+                continue
+            # voice tweaks: process block by block off the event loop, so the first block plays early
+            fx = fx or voicefx.Stream(sr, job.tweak)
+            it = fx.feed(pcm.astype(np.float32) / 32768)
+            while (blk := await asyncio.to_thread(next, it, None)) is not None:
+                await _emit(job, sr, _to_pcm(blk))
+        if fx is not None:
+            await _emit(job, fx.sr, _to_pcm(await asyncio.to_thread(fx.flush)))
     except EngineUnavailable as e:
         job.error = str(e)
     except Exception as e:  # surface anything else as a clean message
@@ -123,8 +144,10 @@ async def _produce(job: SpeakJob) -> None:
 
 def start(text: str, voice: str | None = None, language: str | None = None, play: bool | None = None,
           speed: float | None = None, live: bool = False, streaming_mode: int | None = None,
-          emotion: str | None = None) -> SpeakJob:
-    """Begin synthesis (and playback). Raises LookupError/ValueError for bad input."""
+          emotion: str | None = None, tweak: dict | None = None, preset: str | None = None) -> SpeakJob:
+    """Begin synthesis (and playback). Raises LookupError/ValueError for bad input.
+
+    tweak / preset adjust the voice on top of its saved defaults (see voicefx)."""
     text = (text or "").strip()
     if not text:
         raise ValueError("要说的文字不能为空。")
@@ -132,9 +155,10 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
         raise ValueError("文字太长（上限 4000 字）。请分段调用。")
     v = voices.find(voice)
     req = build_request(v, text, language, speed, streaming_mode, emotion)
+    tw = voicefx.resolve(v.get("tweak"), preset, tweak)
     if play is None:
         play = bool(config.load_settings()["speech"]["play_locally"])
-    job = SpeakJob(voice=v, text=text, request=req, play=play, live=asyncio.Queue() if live else None)
+    job = SpeakJob(voice=v, text=text, request=req, play=play, live=asyncio.Queue() if live else None, tweak=tw)
     if play:
         job.utterance = player.enqueue(Utterance(voice=v["id"], text=text))
     asyncio.create_task(_produce(job))

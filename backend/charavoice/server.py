@@ -187,6 +187,7 @@ def _voice_public(v: dict) -> dict:
         "emotions": voices.emotions_of(v),
         "consent": v.get("consent"),
         "params": v.get("params"),
+        "tweak": v.get("tweak") or {"pitch": 0.0, "formant": 0.0, "brightness": 0.0, "breath": 0.0},
         "created_at": v.get("created_at"),
         "avatar": {
             s: ({"url": f"{base}/{s}?v={Path(p).stem}", "kind": "video" if Path(p).suffix in (".webm", ".mp4") else "image"} if p else None)
@@ -235,21 +236,60 @@ async def create_voice(
     ref_audio: UploadFile | None = File(None),
     ref_text: str = Form(""),
     ref_lang: str = Form(""),
+    design_id: str = Form("", description="用 /v1/voices/design 生成的候选作为参考音频（consent 须为 designed）"),
 ):
     if consent not in voices.CONSENT_KINDS:
         raise ApiError(400, "新建声音前必须选择“本人声音”(self) 或“已获授权的声音”(authorized)。", "consent_required")
+    if (consent == "designed") != bool(design_id):
+        raise ApiError(400, "文字设计的声音（designed）必须带 design_id，且只有它可以用 designed。", "consent_required")
     if not consent_ack:
         raise ApiError(400, voices.CONSENT_NOTICE + "确认后请把 consent_ack 设为 true。", "consent_required")
+    if design_id:
+        from . import design
+
+        src = design.candidate_path(design_id)
+        base = base or "omnivoice"
     if base:
         _check_base(base)
     v = voices.create(name, consent, language, base)
-    if ref_audio is not None:
-        try:
+    try:
+        if design_id:
+            rel = "ref/ref.wav"
+            dur = await asyncio.to_thread(audio_util.to_wav_file, src.read_bytes(), voices.folder(v["id"]) / rel, 32000)
+            v = voices.set_ref(v["id"], rel, ref_text.strip() or design.SAMPLE.get(language, ""), language, dur)
+        elif ref_audio is not None:
             v = await _save_ref(v, ref_audio, ref_text, ref_lang)
-        except Exception:
-            voices.delete(v["id"])
-            raise
+    except Exception:
+        voices.delete(v["id"])
+        raise
     return _voice_public(v)
+
+
+class DesignBody(BaseModel):
+    language: str = Field("zh", description="zh / en")
+    gender: str | None = Field(None, description="male / female")
+    age: str | None = Field(None, description="child / teenager / young adult / middle-aged / elderly")
+    pitch: str | None = Field(None, description="very low pitch / low pitch / moderate pitch / high pitch / very high pitch")
+    whisper: bool = False
+    accent: str | None = Field(None, description="英文口音，如 british accent")
+    text: str | None = Field(None, description="试听用的句子；省略用默认句")
+    n: int = Field(3, ge=1, le=5)
+
+
+@app.post("/v1/voices/design", dependencies=[Depends(auth)])
+async def design_voice(body: DesignBody):
+    """Generate n candidate voices from a description (OmniVoice); pick one and create the voice with its id."""
+    from . import design
+
+    ins = design.instruct(body.gender, body.age, body.pitch, body.whisper, body.accent, body.language)
+    return {"instruct": ins, "candidates": await design.candidates(ins, body.language, body.text, body.n)}
+
+
+@app.get("/v1/voices/design/{cid}/audio", dependencies=[Depends(auth)])
+async def design_audio(cid: str):
+    from . import design
+
+    return FileResponse(design.candidate_path(cid), media_type="audio/wav")
 
 
 @app.get("/v1/voices/{vid}", dependencies=[Depends(auth)])
@@ -267,6 +307,7 @@ class VoicePatch(BaseModel):
     base: str | None = None
     params: dict[str, float] | None = None
     default: bool | None = None
+    tweak: dict[str, float] | None = None
 
 
 @app.patch("/v1/voices/{vid}", dependencies=[Depends(auth)])
@@ -361,6 +402,15 @@ class SpeechRequest(BaseModel):
     streaming_mode: int | None = Field(default=None, ge=0, le=3, description="0 整段 / 1 逐句 / 2 流式 / 3 极速流式；省略按设置")
     emotion: str | None = Field(default=None, description="neutral / happy / angry / sad / surprised / fearful / gentle；用声音里带该标签的参考音频")
     agent: str | None = Field(default=None, description="调用方名字；省略 voice 时用这个 Agent 绑定的声音（也可用 X-CharaVoice-Agent 头）")
+    pitch: float | None = Field(default=None, ge=-6, le=6, description="音高（半音），保持音色")
+    formant: float | None = Field(default=None, ge=-20, le=20, description="共振峰 / 年龄感（%），正值更年轻、偏女声")
+    brightness: float | None = Field(default=None, ge=-6, le=6, description="明亮 / 温暖（dB）")
+    breath: float | None = Field(default=None, ge=0, le=1, description="气声 0-1")
+    preset: str | None = Field(default=None, description="声线预设：sweet / deep / younger / mature")
+
+
+def _tweak(body) -> dict:
+    return {k: getattr(body, k) for k in ("pitch", "formant", "brightness", "breath") if getattr(body, k) is not None}
 
 
 def _bound(request: Request, agent: str | None, via: str) -> tuple[str | None, str | None]:
@@ -403,7 +453,8 @@ async def audio_speech(body: SpeechRequest, request: Request):
     fmt = (body.response_format or "wav").lower()
     if streaming and fmt not in ("wav", "pcm"):
         raise ApiError(400, "流式输出只支持 response_format=wav 或 pcm。")
-    job = speech.start(body.input, vid, body.language, play=body.play, speed=body.speed, live=streaming, streaming_mode=body.streaming_mode, emotion=body.emotion)
+    job = speech.start(body.input, vid, body.language, play=body.play, speed=body.speed, live=streaming, streaming_mode=body.streaming_mode,
+                       emotion=body.emotion, tweak=_tweak(body), preset=body.preset)
     if streaming:
         from . import compliance
 
@@ -439,6 +490,11 @@ class SpeakBody(BaseModel):
     emotion: str | None = Field(default=None, description="neutral / happy / angry / sad / surprised / fearful / gentle")
     agent: str | None = Field(default=None, description="调用方名字；省略 voice 时用这个 Agent 绑定的声音")
     via: str = Field(default="http", description="接入方式（mcp / cli / http），只用于界面显示")
+    pitch: float | None = Field(default=None, ge=-6, le=6, description="音高（半音），保持音色")
+    formant: float | None = Field(default=None, ge=-20, le=20, description="共振峰 / 年龄感（%），正值更年轻、偏女声")
+    brightness: float | None = Field(default=None, ge=-6, le=6, description="明亮 / 温暖（dB）")
+    breath: float | None = Field(default=None, ge=0, le=1, description="气声 0-1")
+    preset: str | None = Field(default=None, description="声线预设：sweet / deep / younger / mature")
 
 
 @app.post("/v1/speak", dependencies=[Depends(auth)])
@@ -448,7 +504,8 @@ async def speak(body: SpeakBody, request: Request):
     vid = _pick_voice(body.voice) or bound_voice
     body.emotion = body.emotion or bound_emotion
     t0 = time.monotonic()
-    job = speech.start(body.text, vid, body.language, play=True, speed=body.speed, streaming_mode=3 if body.low_latency else None, emotion=body.emotion)
+    job = speech.start(body.text, vid, body.language, play=True, speed=body.speed, streaming_mode=3 if body.low_latency else None,
+                       emotion=body.emotion, tweak=_tweak(body), preset=body.preset)
     utt = job.utterance
     assert utt is not None
     started = await asyncio.to_thread(_wait_any, utt, 120.0)
@@ -1082,6 +1139,7 @@ async def well_known():
             "openapi": {"method": "GET", "path": "/openapi.json"},
         },
         "mcp": {"stdio": "charavoice-mcp", "streamable_http": "/mcp", "tools": ["speak", "list_voices", "listen", "transcribe"]},
+        "voice_tweak": {"fields": ["pitch", "formant", "brightness", "breath", "preset"], "info": "/v1/voicefx"},
         "agent_binding": {"header": "X-CharaVoice-Agent", "body_field": "agent", "mcp": "client name from initialize, or CHARAVOICE_AGENT",
                           "note": "omit voice to speak with the voice the user bound to this agent"},
     }
@@ -1096,6 +1154,14 @@ async def dictation_toggle(type_into_focus: bool = True):
     """Start listening for one turn and type the result into the focused window; call again to cancel."""
     started = dictation.toggle(type_into_focus)
     return {"active": started}
+
+
+# ---------------------------------------------------------------- voice tweaks
+@app.get("/v1/voicefx", dependencies=[Depends(auth)])
+async def voicefx_info():
+    from . import voicefx
+
+    return {"limits": voicefx.LIMITS, "presets": voicefx.PRESETS, "labels": voicefx.PRESET_LABEL}
 
 
 # ---------------------------------------------------------------- agents (P5)

@@ -30,7 +30,8 @@ EMOTIONS = {
     "neutral": "平静", "happy": "开心", "angry": "生气", "sad": "悲伤",
     "surprised": "惊讶", "fearful": "害怕", "gentle": "温柔",
 }
-CONSENT_KINDS = {"self": "本人声音", "authorized": "已获授权的声音"}
+CONSENT_KINDS = {"self": "本人声音", "authorized": "已获授权的声音", "designed": "文字设计的合成声音"}
+DESIGNED_NOTICE = "由文字描述生成，不对应任何真实人物；请勿用它冒充他人。"
 AVATAR_STATES = ("default", "idle", "listening", "speaking")
 AVATAR_EXT = {".gif", ".png", ".apng", ".webp", ".webm", ".mp4"}
 LANGS = ("zh", "en", "ja")
@@ -122,7 +123,7 @@ def create(name: str, consent_kind: str, language: str = "zh", base: str | None 
             "consent": {
                 "kind": consent_kind,
                 "label": CONSENT_KINDS[consent_kind],
-                "notice": CONSENT_NOTICE,
+                "notice": DESIGNED_NOTICE if consent_kind == "designed" else CONSENT_NOTICE,
                 "confirmed_at": now_iso(),
             },
             "avatar": {s: None for s in AVATAR_STATES},
@@ -135,7 +136,7 @@ def create(name: str, consent_kind: str, language: str = "zh", base: str | None 
 
 
 def update(vid: str, patch: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"name", "language", "params", "base", "avatar_mode"}
+    allowed = {"name", "language", "params", "base", "avatar_mode", "tweak"}
     with _lock:
         v = _read(vid)
         for k, val in patch.items():
@@ -151,6 +152,10 @@ def update(vid: str, patch: dict[str, Any]) -> dict[str, Any]:
                 v["base"] = val
             elif k == "avatar_mode" and val in ("circle", "free"):
                 v["avatar_mode"] = val
+            elif k == "tweak" and isinstance(val, dict):
+                from .voicefx import Tweak
+
+                v["tweak"] = Tweak.of(val).dict()
         _write(v)
     return v
 
