@@ -94,8 +94,8 @@ def precheck(vid: str) -> dict[str, Any]:
         items.append({"key": key, "ok": ok, "label": label, "detail": detail, "blocking": blocking and not ok})
 
     add("engine", engine.installed(), "GPT-SoVITS 引擎", "已安装" if engine.installed() else "没有找到引擎，请运行 setup.bat")
-    add("base", (v.get("base") or "v2Pro") in ("v2Pro", "v2ProPlus"), "基础模型",
-        f"{v.get('base')}（训练支持 v2Pro / v2ProPlus）")
+    base = v.get("base") or "v2Pro"
+    add("base", True, "基础模型", base if base in ("v2Pro", "v2ProPlus") else f"{base}（零样本用）；训练会使用 v2Pro 底模，训完自动切换", False)
     if g["ok"]:
         # the inference engine is stopped during training, so its share counts as available
         engine_mb = 3500 if engine.state == "ready" else 0
@@ -254,7 +254,7 @@ def _run(job: TrainJob) -> None:
 
     try:
         v = voices.get(vid)
-        version = v.get("base") or "v2Pro"
+        version = v.get("base") if v.get("base") in ("v2Pro", "v2ProPlus") else "v2Pro"
         _stage(job, "check")
         exp = exp_dir(vid)
         exp.mkdir(parents=True, exist_ok=True)
@@ -269,6 +269,7 @@ def _run(job: TrainJob) -> None:
         gpt = _train_s1(job, version, exp)
         rel = lambda p: str(Path(p).resolve().relative_to(voices.folder(vid).resolve())).replace("\\", "/")
         voices.set_weights(vid, rel(gpt), rel(sovits))
+        voices.update(vid, {"base": version})  # trained weights belong to the base they were tuned from
         _stage(job, "test")
         engine.hold = None
         on_loop(engine.start())

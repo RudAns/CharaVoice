@@ -115,7 +115,7 @@ def create(name: str, consent_kind: str, language: str = "zh", base: str | None 
             "name": name,
             "created_at": now_iso(),
             "language": language if language in LANGS else "zh",
-            "base": base or config.load_settings()["engine"]["version"],
+            "base": base or config.load_settings()["engine"].get("zero_shot_base", "v5turbo"),
             "ref": None,
             "aux_refs": [],
             "weights": {"gpt": None, "sovits": None, "trained_at": None},

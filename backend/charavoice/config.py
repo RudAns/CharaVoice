@@ -34,8 +34,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "autostart": True,
         "device": "cuda",
         "is_half": True,
-        # Base model used for zero-shot voices and as the training base.
+        # Base model loaded at engine start-up and used as the training base.
         "version": "v2Pro",
+        # Base model for new zero-shot voices: V5 turbo clones markedly closer without training
+        # (measured speaker similarity 0.78 vs 0.48 for v2Pro on the same reference).
+        "zero_shot_base": "v5turbo",
         "start_timeout": 120,
         # 0 = whole utterance, 1 = per sentence (best quality), 2/3 = token streaming.
         "streaming_mode": 1,

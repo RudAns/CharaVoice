@@ -111,9 +111,9 @@ function VoiceDetail({ v }: { v: Voice }) {
             <label class="field">
               <span>基础模型</span>
               <select value={v.base} onChange={(e) => patch({ base: (e.target as HTMLSelectElement).value })}>
-                <option value="v2Pro">v2Pro（推荐，训练用）</option>
+                <option value="v5turbo">V5 turbo（零样本最像，推荐）</option>
+                <option value="v2Pro">v2Pro（训练用底模）</option>
                 <option value="v2ProPlus">v2ProPlus</option>
-                <option value="v5turbo">V5 turbo（零样本更像）</option>
               </select>
             </label>
           </div>
