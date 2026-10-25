@@ -10,7 +10,7 @@ from typing import AsyncIterator
 import numpy as np
 
 from . import config, voices
-from .engine import EngineUnavailable, SynthRequest, engine
+from .engine import EngineUnavailable, SynthRequest, engine, engine_for
 from .player import Utterance, player
 
 _KANA = re.compile(r"[぀-ヿㇰ-ㇿ]")
@@ -53,7 +53,15 @@ def build_request(voice: dict, text: str, language: str | None, speed: float | N
     if not ref:
         raise LookupError(f"声音“{voice['name']}”还没有参考音频，请先在声音设置里上传一段 3-10 秒的参考音频。")
     s = config.load_settings()["engine"]
-    base_gpt, base_sovits = engine.base_weights(voice.get("base") or s["version"])
+    base = voice.get("base") or s["version"]
+    if base == "omnivoice":
+        return SynthRequest(
+            text=text, text_lang=norm_lang(language, text), ref_audio=voices.abspath(voice, ref["audio"]),
+            prompt_text=ref.get("text", ""), prompt_lang=ref.get("lang") or voice.get("language") or "zh",
+            gpt_weights="", sovits_weights="", speed=float(speed or (voice.get("params") or {}).get("speed") or 1.0),
+            streaming_mode=int(s["streaming_mode"] if streaming_mode is None else streaming_mode), engine="omnivoice",
+        )
+    base_gpt, base_sovits = engine.base_weights(base)
     w = voice.get("weights") or {}
     p = voice.get("params") or {}
     return SynthRequest(
@@ -92,7 +100,7 @@ class SpeakJob:
 
 async def _produce(job: SpeakJob) -> None:
     try:
-        async for sr, pcm in engine.synthesize(job.request):
+        async for sr, pcm in engine_for(job.request.engine).synthesize(job.request):
             if job.utterance is not None and job.utterance.cancelled and job.live is None:
                 break
             job.sr = sr

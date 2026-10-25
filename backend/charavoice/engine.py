@@ -63,6 +63,8 @@ class SynthRequest:
     speed: float = 1.0
     streaming_mode: int = 1
     seed: int = -1
+    engine: str = "gpt-sovits"
+    steps: int | None = None  # OmniVoice diffusion steps
     top_k: int = 15
     top_p: float = 1.0
     temperature: float = 1.0
@@ -75,6 +77,13 @@ def _port_free(port: int) -> bool:
 
 
 class Engine:
+    """GPT-SoVITS api_v2 process. Subclasses override the launch/probe/payload hooks."""
+
+    name = "gpt-sovits"
+    label = "GPT-SoVITS"
+    log_name = "engine.log"
+    probe_path = "/docs"
+
     def __init__(self) -> None:
         self.state = STOPPED
         self.message = "引擎未启动"
@@ -116,7 +125,8 @@ class Engine:
             "installed": self.installed(),
             "port": self.port or None,
             "pid": self.proc.pid if self.proc and self.proc.poll() is None else None,
-            "version": self.settings["version"],
+            "version": self.settings.get("version", ""),
+            "name": self.name,
             "loaded": list(self.loaded) if self.loaded else None,
             "hold": self.hold,
         }
@@ -150,7 +160,7 @@ class Engine:
         return cfg
 
     def _pump_logs(self, proc: subprocess.Popen) -> None:
-        log_path = config.LOG_DIR / "engine.log"
+        log_path = config.LOG_DIR / self.log_name
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"\n===== engine start {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
             assert proc.stdout is not None
@@ -162,7 +172,7 @@ class Engine:
         code = proc.wait()
         if self.proc is proc and self.state != STOPPED:
             loop = bus._loop
-            msg = f"引擎进程意外退出（退出码 {code}），详见 data/logs/engine.log"
+            msg = f"{self.label} 进程意外退出（退出码 {code}），详见 data/logs/{self.log_name}"
             if loop and not loop.is_closed():
                 loop.call_soon_threadsafe(self._set, ERROR, msg)
 
@@ -171,7 +181,7 @@ class Engine:
             if self.proc and self.proc.poll() is None and self.state in (STARTING, READY):
                 return
             if not self.installed():
-                self._set(ERROR, f"没有找到 GPT-SoVITS 引擎（{self.settings['dir']}），请先运行 setup.bat 安装")
+                self._set(ERROR, self.missing_message())
                 return
             s = self.settings
             port = int(s["port"])
@@ -183,12 +193,11 @@ class Engine:
                 self._set(ERROR, f"端口 {s['port']} 起的 20 个端口都被占用，无法启动引擎")
                 return
             self.port = port
-            cfg = self._write_config()
-            d = self.dir
-            args = [str(d / "runtime" / "python.exe"), "-I", "api_v2.py", "-a", "127.0.0.1", "-p", str(port), "-c", str(cfg)]
+            await release_gpu_for(self)
+            args, cwd, env = self._launch(port)
             self._set(STARTING, "正在加载声音模型…")
             config.ensure_dirs()
-            self.proc = procutil.spawn(args, cwd=str(d), env=procutil.child_env([str(d / "runtime")]))
+            self.proc = procutil.spawn(args, cwd=cwd, env=env)
             threading.Thread(target=self._pump_logs, args=(self.proc,), daemon=True).start()
             self._client = httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{port}", timeout=httpx.Timeout(float(s.get("synth_timeout", 90)), connect=5)
@@ -200,7 +209,7 @@ class Engine:
                     self._set(ERROR, f"引擎启动失败（退出码 {self.proc.returncode}）。日志末尾：\n{tail}")
                     return
                 try:
-                    r = await self._client.get("/docs", timeout=2)
+                    r = await self._client.get(self.probe_path, timeout=2)
                     if r.status_code == 200:
                         self._set(READY, "引擎就绪")
                         if s.get("warmup", True):
@@ -209,8 +218,30 @@ class Engine:
                 except httpx.HTTPError:
                     pass
                 await asyncio.sleep(0.5)
-            self._set(ERROR, f"引擎在 {s['start_timeout']} 秒内没有就绪，已放弃等待；详见 data/logs/engine.log")
+            self._set(ERROR, f"{self.label} 在 {s['start_timeout']} 秒内没有就绪，已放弃等待；详见 data/logs/{self.log_name}")
             await self._kill()
+
+    def missing_message(self) -> str:
+        return f"没有找到 GPT-SoVITS 引擎（{self.settings['dir']}），请先运行 setup.bat 安装"
+
+    def _launch(self, port: int) -> tuple[list[str], str, dict]:
+        cfg = self._write_config()
+        d = self.dir
+        args = [str(d / "runtime" / "python.exe"), "-I", "api_v2.py", "-a", "127.0.0.1", "-p", str(port), "-c", str(cfg)]
+        return args, str(d), procutil.child_env([str(d / "runtime")])
+
+    def _payload(self, req: SynthRequest) -> dict:
+        return {
+            "text": req.text, "text_lang": req.text_lang, "ref_audio_path": req.ref_audio,
+            "aux_ref_audio_paths": req.aux_refs or [], "prompt_text": req.prompt_text, "prompt_lang": req.prompt_lang,
+            "top_k": req.top_k, "top_p": req.top_p, "temperature": req.temperature, "text_split_method": "cut5",
+            "batch_size": 1, "speed_factor": req.speed, "seed": req.seed, "media_type": "wav",
+            "streaming_mode": int(req.streaming_mode), "parallel_infer": True,
+            "use_cuda_graph": bool(self.settings.get("use_cuda_graph", True)),
+        }
+
+    async def _prepare(self, req: SynthRequest) -> None:
+        await self._load_weights(req.gpt_weights, req.sovits_weights)
 
     async def _kill(self) -> None:
         proc = self.proc
@@ -298,25 +329,7 @@ class Engine:
         """Yield (sample_rate, int16 mono chunk) as the engine produces audio."""
         await self.ensure_ready()
         assert self._client is not None
-        payload = {
-            "text": req.text,
-            "text_lang": req.text_lang,
-            "ref_audio_path": req.ref_audio,
-            "aux_ref_audio_paths": req.aux_refs or [],
-            "prompt_text": req.prompt_text,
-            "prompt_lang": req.prompt_lang,
-            "top_k": req.top_k,
-            "top_p": req.top_p,
-            "temperature": req.temperature,
-            "text_split_method": "cut5",
-            "batch_size": 1,
-            "speed_factor": req.speed,
-            "seed": req.seed,
-            "media_type": "wav",
-            "streaming_mode": int(req.streaming_mode),
-            "parallel_infer": True,
-            "use_cuda_graph": bool(self.settings.get("use_cuda_graph", True)),
-        }
+        payload = self._payload(req)
         if presence:
             self._waiting += 1
         try:
@@ -328,7 +341,7 @@ class Engine:
             if presence:
                 bus.enter(THINKING)
             try:
-                await self._load_weights(req.gpt_weights, req.sovits_weights)
+                await self._prepare(req)
                 if req.streaming_mode == 0:
                     r = await self._client.post("/tts", json=payload)
                     if r.status_code != 200:
@@ -395,4 +408,69 @@ def _err_text(body: bytes) -> str:
         return body[:300].decode("utf-8", "replace")
 
 
+
+class OmniEngine(Engine):
+    """OmniVoice (k2-fsa) in its own virtual environment, served by engine_scripts/omnivoice_server.py."""
+
+    name = "omnivoice"
+    label = "OmniVoice"
+    log_name = "omnivoice.log"
+    probe_path = "/health"
+
+    @property
+    def settings(self) -> dict:
+        return config.load_settings()["omnivoice"]
+
+    @property
+    def dir(self) -> Path:
+        return config.resolve(self.settings["dir"])
+
+    def python(self) -> Path:
+        return self.dir / ".venv" / "Scripts" / "python.exe"
+
+    def installed(self) -> bool:
+        return self.python().exists() and (self.dir / ".venv" / "Lib" / "site-packages" / "omnivoice").exists()
+
+    def missing_message(self) -> str:
+        return "没有安装 OmniVoice 引擎。运行 setup.bat --with-omnivoice，或在“模型”页安装。"
+
+    def _launch(self, port: int) -> tuple[list[str], str, dict]:
+        script = Path(__file__).parent / "engine_scripts" / "omnivoice_server.py"
+        model_dir = config.resolve(self.settings["model_dir"])
+        model_dir.mkdir(parents=True, exist_ok=True)
+        args = [str(self.python()), str(script), "--port", str(port), "--model-dir", str(model_dir)]
+        env = procutil.child_env()
+        env.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+        return args, str(self.dir), env
+
+    def _payload(self, req: SynthRequest) -> dict:
+        fast = req.streaming_mode == 3
+        steps = req.steps or int(self.settings["fast_steps"] if fast else self.settings["steps"])
+        return {"text": req.text, "language": req.text_lang if req.text_lang in ("zh", "en", "ja", "ko", "yue") else None,
+                "ref_audio": req.ref_audio, "ref_text": req.prompt_text, "speed": req.speed, "steps": steps,
+                "stream": req.streaming_mode != 0}
+
+    async def _prepare(self, req: SynthRequest) -> None:
+        self.loaded = ("omnivoice", "")
+
+    async def _warmup(self) -> None:
+        return  # first call compiles nothing; prompts are cached per reference by the server
+
+
 engine = Engine()
+omni = OmniEngine()
+ENGINES = {"gpt-sovits": engine, "omnivoice": omni}
+
+
+def engine_for(name: str) -> Engine:
+    return ENGINES.get(name, engine)
+
+
+async def release_gpu_for(starting: Engine) -> None:
+    """Only one GPU engine stays resident (each needs ~3-4 GB); stop the others first."""
+    if not config.load_settings().get("gpu", {}).get("exclusive", True):
+        return
+    for e in ENGINES.values():
+        if e is not starting and e.state in (STARTING, READY):
+            log.info("stopping %s to free GPU memory for %s", e.label, starting.label)
+            await e.stop()

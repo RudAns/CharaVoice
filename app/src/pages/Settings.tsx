@@ -70,6 +70,8 @@ export function Settings() {
         {logs && <pre class="logs">{logs.slice(-120).join("\n")}</pre>}
       </div>
 
+      <OmniCard />
+
       <h3>播放与麦克风</h3>
       <div class="card">
         <label class="check">
@@ -129,5 +131,32 @@ export function Settings() {
         </label>
       </div>
     </div>
+  );
+}
+
+function OmniCard() {
+  const [e, setE] = useState<any>(null);
+  const load = () => api("/v1/engines").then((r) => setE(r.engines.find((x: any) => x.name === "omnivoice")));
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, []);
+  if (!e) return null;
+  return (
+    <>
+      <h3>零样本引擎（OmniVoice，可选）</h3>
+      <div class="card">
+        <div class="engine-line">
+          <span class={`dot ${e.state}`} />
+          <strong>{e.installed ? ENGINE_LABEL[e.state] ?? e.state : "未安装"}</strong>
+          <span class="muted">{e.installed ? e.message : "运行 setup.bat --with-omnivoice 安装（约 5GB）"}</span>
+          <div class="grow" />
+          <button disabled={!e.installed} onClick={() => api("/v1/engines/omnivoice/start", { method: "POST" }).then(load)}>启动</button>
+          <button disabled={!e.installed} onClick={() => api("/v1/engines/omnivoice/stop", { method: "POST" }).then(load)}>停止</button>
+        </div>
+        <p class="muted">不训练也能高相似的零样本引擎（k2-fsa OmniVoice，代码 Apache-2.0）。把声音的“基础模型”选成 OmniVoice 即可使用。它和 GPT-SoVITS 不同时占用显存，切换声音时会自动卸载另一个（约 15 秒）。</p>
+      </div>
+    </>
   );
 }

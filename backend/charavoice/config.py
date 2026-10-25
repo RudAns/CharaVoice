@@ -49,6 +49,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # Seconds without audio from the engine before the request fails and the engine is restarted.
         "synth_timeout": 90,
     },
+    "omnivoice": {
+        "dir": "engines/omnivoice",
+        "model_dir": "models/omnivoice",
+        "port": 9881,
+        "start_timeout": 600,
+        "synth_timeout": 120,
+        "steps": 16,
+        "fast_steps": 8,
+        "autostart": True,
+    },
+    "gpu": {"exclusive": True},
     "speech": {
         "default_voice": "",
         "play_locally": True,

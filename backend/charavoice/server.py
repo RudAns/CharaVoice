@@ -162,6 +162,11 @@ async def devices():
 
 
 # ---------------------------------------------------------------- voices
+def _check_base(base: str) -> None:
+    if base != "omnivoice":
+        engine.base_weights(base)
+
+
 def _voice_public(v: dict) -> dict:
     base = f"/v1/voices/{v['id']}/avatar"
     return {
@@ -231,7 +236,7 @@ async def create_voice(
     if not consent_ack:
         raise ApiError(400, voices.CONSENT_NOTICE + "确认后请把 consent_ack 设为 true。", "consent_required")
     if base:
-        engine.base_weights(base)
+        _check_base(base)
     v = voices.create(name, consent, language, base)
     if ref_audio is not None:
         try:
@@ -263,7 +268,7 @@ class VoicePatch(BaseModel):
 async def patch_voice(vid: str, body: VoicePatch):
     try:
         if body.base:
-            engine.base_weights(body.base)
+            _check_base(body.base)
         v = voices.update(vid, body.model_dump(exclude={"default"}))
     except KeyError:
         raise ApiError(404, f"找不到声音 {vid}", "not_found")
@@ -995,3 +1000,32 @@ async def ref_audio(vid: str, rid: str):
     if not r:
         raise ApiError(404, "找不到这段参考音频", "not_found")
     return FileResponse(voices.abspath(v, r["audio"]), media_type="audio/wav")
+
+
+
+# ---------------------------------------------------------------- engines (P3)
+from .engine import ENGINES  # noqa: E402
+
+
+@app.get("/v1/engines", dependencies=[Depends(auth)])
+async def engines_list():
+    return {"engines": [e.info() | {"label": e.label, "installed": e.installed()} for e in ENGINES.values()]}
+
+
+@app.post("/v1/engines/{name}/start", dependencies=[Depends(auth)])
+async def engines_start(name: str):
+    e = ENGINES.get(name)
+    if not e:
+        raise ApiError(404, f"没有这个引擎：{name}", "not_found")
+    asyncio.create_task(e.start())
+    await asyncio.sleep(0.1)
+    return e.info()
+
+
+@app.post("/v1/engines/{name}/stop", dependencies=[Depends(auth)])
+async def engines_stop(name: str):
+    e = ENGINES.get(name)
+    if not e:
+        raise ApiError(404, f"没有这个引擎：{name}", "not_found")
+    await e.stop()
+    return e.info()

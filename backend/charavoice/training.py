@@ -260,10 +260,13 @@ def _run(job: TrainJob) -> None:
         exp.mkdir(parents=True, exist_ok=True)
         ex = dataset.export(vid)
         _log(vid, f"训练列表：{ex['lines']} 段，{ex['seconds']:.0f} 秒")
-        engine.hold = "正在训练声音，训练期间暂停语音合成（训练结束会自动恢复）。"
-        if engine.state != "stopped":
-            _log(vid, "暂停推理引擎以释放显存")
-            on_loop(engine.stop())
+        from .engine import ENGINES
+
+        for e in ENGINES.values():
+            e.hold = "正在训练声音，训练期间暂停语音合成（训练结束会自动恢复）。"
+            if e.state != "stopped":
+                _log(vid, f"暂停 {e.label} 以释放显存")
+                on_loop(e.stop())
         _prepare(job, version, exp)
         sovits = _train_s2(job, version, exp)
         gpt = _train_s1(job, version, exp)
@@ -271,7 +274,8 @@ def _run(job: TrainJob) -> None:
         voices.set_weights(vid, rel(gpt), rel(sovits))
         voices.update(vid, {"base": version})  # trained weights belong to the base they were tuned from
         _stage(job, "test")
-        engine.hold = None
+        for e in ENGINES.values():
+            e.hold = None
         on_loop(engine.start())
         restart_engine = False
         job.samples = on_loop(_samples(vid))
@@ -289,7 +293,10 @@ def _run(job: TrainJob) -> None:
         job.message = str(e)
         _emit(job)
     finally:
-        engine.hold = None
+        from .engine import ENGINES as _all
+
+        for e in _all.values():
+            e.hold = None
         if restart_engine:
             try:
                 on_loop(engine.start())

@@ -121,6 +121,22 @@ def step_speaker_model() -> None:
         download(f"https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/{p.name}", p)
 
 
+def step_omnivoice() -> None:
+    """Optional OmniVoice engine: its own venv with CUDA PyTorch (weights download on first start)."""
+    d = ROOT / "engines" / "omnivoice"
+    py = d / ".venv" / "Scripts" / "python.exe"
+    if not shutil.which("uv"):
+        sys.exit("[setup] 安装 OmniVoice 需要 uv（https://docs.astral.sh/uv/）。")
+    if not py.exists():
+        say("创建 OmniVoice 虚拟环境")
+        d.mkdir(parents=True, exist_ok=True)
+        subprocess.check_call(["uv", "venv", str(d / ".venv"), "--python", "3.11"])
+    say("安装 CUDA 版 PyTorch 与 OmniVoice（约 5GB）")
+    subprocess.check_call(["uv", "pip", "install", "--python", str(py), "torch==2.8.0+cu128", "torchaudio==2.8.0+cu128",
+                           "--extra-index-url", "https://download.pytorch.org/whl/cu128"])
+    subprocess.check_call(["uv", "pip", "install", "--python", str(py), "omnivoice", "fastapi", "uvicorn[standard]", "soundfile"])
+
+
 def step_frontend() -> None:
     pnpm = shutil.which("pnpm")
     if not pnpm:
@@ -134,12 +150,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-engine", action="store_true")
     ap.add_argument("--skip-frontend", action="store_true")
+    ap.add_argument("--with-omnivoice", action="store_true", help="另外安装 OmniVoice 零样本引擎")
     a = ap.parse_args()
     step_venv()
     step_asr()
     step_speaker_model()
     if not a.skip_engine:
         step_engine()
+    if a.with_omnivoice:
+        step_omnivoice()
     if not a.skip_frontend:
         step_frontend()
     say("完成。运行 start.bat 启动 CharaVoice。")

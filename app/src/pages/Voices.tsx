@@ -114,6 +114,7 @@ function VoiceDetail({ v }: { v: Voice }) {
                 <option value="v5turbo">V5 turbo（零样本最像，推荐）</option>
                 <option value="v2Pro">v2Pro（训练用底模）</option>
                 <option value="v2ProPlus">v2ProPlus</option>
+                <option value="omnivoice">OmniVoice（零样本高相似，较慢，需安装）</option>
               </select>
             </label>
           </div>
