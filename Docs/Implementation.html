@@ -121,7 +121,7 @@
 </svg>
 <table>
   <tr><th>要点</th><th>做法</th></tr>
-  <tr><td>参数传递</td><td>和 webui.py 一致：准备脚本全部读环境变量（<code>inp_text</code>、<code>inp_wav_dir</code>、<code>opt_dir</code>、<code>i_part</code>/<code>all_parts</code>、<code>version</code>、<code>is_half</code>…）；训练脚本读由模板改写的配置（<code>configs/s2v2Pro.json</code>、<code>configs/s1longer-v2.yaml</code>）。用 <code>runtime\python.exe -s</code> 执行。</td></tr>
+  <tr><td>参数传递</td><td>和 webui.py 一致：准备脚本全部读环境变量（<code>inp_text</code>、<code>inp_wav_dir</code>、<code>opt_dir</code>、<code>i_part</code>/<code>all_parts</code>、<code>version</code>、<code>is_half</code>…）；训练脚本读由模板改写的配置（<code>configs/s2v2ProPlus.json</code> 或 <code>s2v2Pro.json</code>、<code>configs/s1longer-v2.yaml</code>）。默认底模是 v2ProPlus：同样 10 分钟素材，比 v2Pro、V5 turbo LoRA、VoxCPM2 LoRA、Qwen3-TTS 微调都更像，速度与 v2Pro 相同。语义 token 由底模自己的量化器提取，按底模分别存成 <code>6-name2semantic-&lt;版本&gt;.tsv</code>。用 <code>runtime\python.exe -s</code> 执行。</td></tr>
   <tr><td>目录</td><td>实验目录与权重输出都指向声音自己的文件夹（<code>data/voices/&lt;id&gt;/train/exp</code>、<code>weights/</code>），不写引擎目录。<strong>启动 s2 前必须先建 <code>exp/logs_s2_&lt;版本&gt;</code></strong>，否则第一次保存检查点就失败。</td></tr>
   <tr><td>断点续训</td><td>s2 从 <code>logs_s2_&lt;版本&gt;</code> 里最新的 G_/D_ 检查点续；s1 由 Lightning 从 <code>ckpt/</code> 续。准备阶段产物存在就跳过。所以“继续训练”就是用同一目录重新跑。</td></tr>
   <tr><td>显存</td><td>训练前停掉推理引擎，并在训练期间拒绝合成请求（返回明确提示）。批量按空闲显存 GB ÷ 2 估算（webui 用总显存 ÷ 2）。</td></tr>

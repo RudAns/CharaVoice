@@ -94,8 +94,8 @@ def precheck(vid: str) -> dict[str, Any]:
         items.append({"key": key, "ok": ok, "label": label, "detail": detail, "blocking": blocking and not ok})
 
     add("engine", engine.installed(), "GPT-SoVITS 引擎", "已安装" if engine.installed() else "没有找到引擎，请在“模型”页安装 GPT-SoVITS")
-    base = v.get("base") or "v2Pro"
-    add("base", True, "基础模型", base if base in ("v2Pro", "v2ProPlus") else f"{base}（零样本用）；训练会使用 v2Pro 底模，训完自动切换", False)
+    base = v.get("base") or DEFAULT_TRAIN_BASE
+    add("base", True, "基础模型", base if base in TRAINABLE else f"{base}（零样本用）；训练会使用 {DEFAULT_TRAIN_BASE} 底模，训完自动切换", False)
     if g["ok"]:
         # the inference engine is stopped during training, so its share counts as available
         engine_mb = 3500 if engine.state == "ready" else 0
@@ -239,6 +239,25 @@ def _kill(job: TrainJob) -> None:
 
 
 # ------------------------------------------------------------------ runner
+TRAINABLE = ("v2Pro", "v2ProPlus")
+# Measured 2026-10 on 10 min of material (RTX 3060): v2ProPlus beat v2Pro on similarity
+# (LJSpeech 0.88 vs 0.81; JVNV F1 Japanese 0.74, best of all tested) at the same speed.
+# V5 turbo LoRA (0.73), VoxCPM2 LoRA (0.68, RTF 1.5) and Qwen3-TTS 0.6B SFT (failed) were not kept.
+DEFAULT_TRAIN_BASE = "v2ProPlus"
+
+
+def train_version(v: dict, params: dict | None) -> str:
+    """Which base to fine-tune: an explicit choice, else the voice's own base if trainable, else v2ProPlus."""
+    want = (params or {}).get("base")
+    if want in TRAINABLE:
+        return want
+    return v.get("base") if v.get("base") in TRAINABLE else DEFAULT_TRAIN_BASE
+
+
+def _semantic(exp: Path, version: str) -> Path:
+    # semantic tokens come from the base's own quantizer, so each base keeps its own file
+    return exp / f"6-name2semantic-{version}.tsv"
+
 def _run(job: TrainJob) -> None:
     import asyncio
 
@@ -254,7 +273,7 @@ def _run(job: TrainJob) -> None:
 
     try:
         v = voices.get(vid)
-        version = v.get("base") if v.get("base") in ("v2Pro", "v2ProPlus") else "v2Pro"
+        version = train_version(v, job.params)
         _stage(job, "check")
         exp = exp_dir(vid)
         exp.mkdir(parents=True, exist_ok=True)
@@ -392,7 +411,7 @@ def _prepare(job: TrainJob, version: str, exp: Path) -> None:
         _exec(job, ["GPT_SoVITS/prepare_datasets/2-get-sv.py"], {**common, "sv_path": str(pm / "sv" / "pretrained_eres2netv2w24s4ep4.ckpt")})
     # 1c
     _stage(job, "1c")
-    sem = exp / "6-name2semantic.tsv"
+    sem = _semantic(exp, version)
     if not sem.exists() or sem.stat().st_size < 31:
         from .engine import BASE_MODELS
 
@@ -480,7 +499,7 @@ def _train_s1(job: TrainJob, version: str, exp: Path) -> Path:
         data["train"]["precision"] = "32"
     data["data"]["num_workers"] = 2
     data["pretrained_s1"] = str((d / BASE_MODELS[version][0]).resolve())
-    data["train_semantic_path"] = str((exp / "6-name2semantic.tsv").resolve())
+    data["train_semantic_path"] = str(_semantic(exp, version).resolve())
     data["train_phoneme_path"] = str((exp / "2-name2text.txt").resolve())
     data["output_dir"] = str((exp / f"logs_s1_{version}").resolve())
     (exp / "logs_s1").mkdir(parents=True, exist_ok=True)

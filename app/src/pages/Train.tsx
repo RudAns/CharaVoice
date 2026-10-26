@@ -117,6 +117,17 @@ export function Train() {
         <span class="tag">{v.trained ? "已有训练权重" : "零样本"}</span>
       </header>
 
+      {!running && !v.trained && (
+        <div class="card advice">
+          <strong>需要训练吗？</strong>
+          <p>
+            实测（10 分钟素材、RTX 3060）：对日语角色声音，训练后与真人录音的声纹相似度 0.74，零样本 V5 turbo 0.73、OmniVoice 0.72，差距很小；
+            训练的好处是开口更快（低延迟首包约 0.19 秒，OmniVoice 约 0.55 秒）、说其他语言更稳（日语声音说中文，识别准确率 训练 0.92 / OmniVoice 0.30）。
+          </p>
+          <p class="muted">素材少或想快速用时推荐 OmniVoice（在声音库把基础模型选成 OmniVoice）；训练适合需要最像、最快响应的长期角色。训练默认使用 v2ProPlus 底模，约 6 分钟。</p>
+        </div>
+      )}
+
       {!running && pre && (
         <div class="card">
           <h3 class="first">开训前检查</h3>

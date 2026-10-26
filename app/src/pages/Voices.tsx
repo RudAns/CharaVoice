@@ -112,8 +112,8 @@ function VoiceDetail({ v }: { v: Voice }) {
               <span>基础模型</span>
               <select value={v.base} onChange={(e) => patch({ base: (e.target as HTMLSelectElement).value })}>
                 <option value="v5turbo">V5 turbo（零样本最像，推荐）</option>
-                <option value="v2Pro">v2Pro（训练用底模）</option>
-                <option value="v2ProPlus">v2ProPlus</option>
+                <option value="v2ProPlus">v2ProPlus（训练默认底模）</option>
+                <option value="v2Pro">v2Pro</option>
                 <option value="omnivoice">OmniVoice（零样本高相似，较慢，需安装）</option>
               </select>
             </label>
@@ -478,6 +478,9 @@ function CreateVoice({ onClose }: { onClose: () => void }) {
               <span>参考文本（可留空，自动识别）</span>
               <input value={refText} placeholder="录音里说的那句话" onInput={(e) => setRefText((e.target as HTMLInputElement).value)} />
             </label>
+            <p class="muted small-note">
+              只有一段录音、想快速用：建好后在声音库把基础模型选成 OmniVoice（零样本最像）。有 10 分钟以上素材、要长期使用：去“训练”页训练，开口更快、跨语言更稳。
+            </p>
           </>
         ) : (
           <>

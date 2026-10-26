@@ -392,3 +392,7 @@ button.ghost { background: transparent; border-color: transparent; color: var(--
 .asset-job .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
 .setup-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 24px 0; padding: 10px 14px; border-radius: 10px;
   background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .35); color: #fde68a; font-size: 13.5px; }
+
+.card.advice { border-color: rgba(139, 124, 246, .45); }
+.card.advice p { margin: 8px 0 0; line-height: 1.6; }
+.small-note { font-size: 12.5px; margin-top: 4px; }

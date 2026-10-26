@@ -37,14 +37,15 @@ CharaVoice 是一个本地桌面软件，只做两件事：
 
 | 引擎 / 声音 | 首包延迟（逐句流式，英 / 中） | 首包延迟（低延迟流式，英 / 中） | 实时率 RTF（英 / 中） | 显存 |
 | --- | --- | --- | --- | --- |
-| GPT-SoVITS v2Pro，训练后的声音 | 0.61 / 0.35 秒 | 0.18 / 0.20 秒 | 0.29 / 0.21 | 约 3.2 GB |
+| GPT-SoVITS v2ProPlus，训练后的声音（中英日 12 句中位数） | 0.43 秒 | 0.19 秒 | 0.28 | 约 3.4 GB |
 | GPT-SoVITS V5 turbo，零样本 | 0.66 / 0.43 秒 | 0.55 / 0.50 秒 | 0.38 / 0.28 | 约 3.8 GB |
 | OmniVoice，零样本（16 步 / 快速 8 步） | 1.26 / 1.16 秒 | 0.65 / 0.60 秒 | 0.35 / 0.38 | 约 4.7 GB |
 
 | 指标 | 结果 |
 | --- | --- |
 | 零样本声纹相似度（英文，与真人参考比，CAM++） | GPT-SoVITS v2Pro 0.48、V5 turbo 0.78、OmniVoice 0.86 |
-| 训练 | 10 分钟 LJSpeech 素材，从开始到可用共 13 分钟；相似度 0.49 → 0.86 |
+| 训练（默认 v2ProPlus 底模） | 10 分钟素材从开始到可用约 6 分钟，训练显存峰值约 7 GB。与没参与训练的真人录音比：LJSpeech 0.88（v2Pro 0.81）；日语情绪语料 JVNV 0.74 |
+| 训练还是零样本 | 对有特色、不在公开数据里的声音（JVNV 日语），零样本已接近训练：V5 turbo 0.73、OmniVoice 0.72 对训练 0.74。训练的好处是开口更快（0.19 对约 0.55 秒）、跨语言更稳（日语声音说中文，识别准确率 0.92 对 OmniVoice 0.30） |
 | 全局听写 | 说完到文字出现 0.70-0.74 秒（VAD 判定 0.5 秒 + 识别 0.08-0.22 秒 + 输入 0.02 秒） |
 | 文件转写 | 52 秒中英混合音频 1.8 秒转完（CPU，RTF 0.035） |
 | 声线调节 | 每秒音频 4-20 毫秒处理；流式首块额外延迟 5-18 毫秒；±3 半音时与原声相似度 0.85-0.86 |
@@ -200,4 +201,4 @@ engines/ models/ data/  本地大文件与用户数据（不进版本库）
 | [FastAPI](https://fastapi.tiangolo.com/)、[Preact](https://preactjs.com/)、[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | 后端框架、界面框架、MCP 服务器 | MIT |
 | [PyInstaller](https://pyinstaller.org/)、[NSIS](https://nsis.sourceforge.io/) | 构建安装包（不随代码分发） | GPL-2.0 含 bootloader 例外（打包产物不受 GPL 约束）、zlib |
 
-听写模型可以在设置里切换为 Whisper（sherpa-onnx 转换版，MIT）。开发测试只使用了公有领域的 [LJSpeech](https://keithito.com/LJ-Speech-Dataset/) 数据集、[CREMA-D](https://github.com/CheyneyComputerScience/CREMA-D)（ODbL / DbCL）片段和程序生成的音频，仓库里不包含任何音频文件。
+听写模型可以在设置里切换为 Whisper（sherpa-onnx 转换版，MIT）。开发测试只使用了公有领域的 [LJSpeech](https://keithito.com/LJ-Speech-Dataset/) 数据集、[CREMA-D](https://github.com/CheyneyComputerScience/CREMA-D)（ODbL / DbCL）片段、[JVNV](https://sites.google.com/site/shinnosuketakamichi/research-topics/jvnv_corpus)（CC BY-SA 4.0）片段和程序生成的音频，仓库里不包含任何音频文件。

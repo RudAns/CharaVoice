@@ -984,6 +984,7 @@ class TrainBody(BaseModel):
     s2_batch: int | None = None
     s1_batch: int | None = None
     fresh: bool = Field(False, description="丢弃上次的训练进度，从头开始")
+    base: str | None = Field(None, description="微调哪个底模：v2ProPlus（默认）/ v2Pro；省略按声音的基础模型")
 
 
 @app.post("/v1/voices/{vid}/train/start", dependencies=[Depends(auth)])
