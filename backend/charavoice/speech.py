@@ -50,7 +50,7 @@ def build_request(voice: dict, text: str, language: str | None, speed: float | N
                   streaming_mode: int | None = None, emotion: str | None = None) -> SynthRequest:
     if emotion and emotion not in voices.EMOTIONS:
         raise ValueError(f"未知的情绪：{emotion}（可用：{', '.join(voices.EMOTIONS)}）")
-    ref = voices.pick_ref(voice, emotion)
+    ref = voices.pick_ref(voice, emotion, norm_lang(language, text))
     if not ref:
         raise LookupError(f"声音“{voice['name']}”还没有参考音频，请先在声音设置里上传一段 3-10 秒的参考音频。")
     s = config.load_settings()["engine"]

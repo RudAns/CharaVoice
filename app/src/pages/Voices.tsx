@@ -187,7 +187,7 @@ function VoiceDetail({ v }: { v: Voice }) {
         <p class="muted">支持 GIF、APNG、动态 WebP，以及短循环视频 WebM / MP4（WebM 可带透明通道）。</p>
       </div>
 
-      <h3>情绪参考</h3>
+      <h3>情绪与语言参考</h3>
       <EmotionRefs v={v} />
 
       <h3>使用授权</h3>
@@ -583,11 +583,15 @@ function EmotionRefs({ v }: { v: Voice }) {
   }
   return (
     <div class="card">
-      <p class="muted">给声音再挂几段带情绪的 3-10 秒录音。Agent 调用时传 emotion（例如 happy），就会用对应的参考音频说话；没有的情绪用主参考音频。也可以在素材页的审阅区把某个片段直接设为情绪参考。</p>
+      <p class="muted">
+        给声音再挂几段 3-10 秒录音。语言会自动识别：说中文时优先用中文参考、说日语时用日语参考，发音和语调跟着参考走，所以有母语参考时外语口音会轻很多。
+        情绪同理，Agent 调用时传 emotion（例如 happy）就用带这个标签的参考。也可以在素材页的审阅区把某个片段直接设为参考。
+      </p>
       <div class="refs">
         {(v.refs ?? []).map((r) => (
           <div class="ref-row">
             <span class={`emo emo-${r.emotion}`}>{EMOTION_LABEL[r.emotion] ?? r.emotion}</span>
+            <span class="emo">{LANG_LABEL[r.lang] ?? r.lang}</span>
             <audio controls src={url(r.url, true)} />
             <span class="ref-line" title={r.text}>“{r.text}” · {r.duration}s</span>
             <button class="small" onClick={() => api(`/v1/voices/${v.id}/refs/${r.id}`, { method: "DELETE" }).then(refreshVoices)}>移除</button>

@@ -195,17 +195,29 @@ def remove_emotion_ref(vid: str, rid: str) -> dict[str, Any]:
     return v
 
 
-def pick_ref(v: dict[str, Any], emotion: str | None) -> dict[str, Any] | None:
-    """Reference clip for an emotion: tagged clips first (longest wins), else the main reference."""
-    if emotion and emotion != "neutral":
-        tagged = [r for r in v.get("refs") or [] if r.get("emotion") == emotion]
-        if tagged:
-            return max(tagged, key=lambda r: r.get("duration", 0))
-    if emotion == "neutral":
-        tagged = [r for r in v.get("refs") or [] if r.get("emotion") == "neutral"]
-        if tagged and not v.get("ref"):
-            return max(tagged, key=lambda r: r.get("duration", 0))
-    return v.get("ref")
+def pick_ref(v: dict[str, Any], emotion: str | None, lang: str | None = None) -> dict[str, Any] | None:
+    """Reference clip for an utterance. Prosody and pronunciation follow the reference, so a clip in the
+    language being spoken matters most (an English reference makes Chinese sound foreign), then the emotion.
+    Order: same language + emotion, same language, emotion, main reference. The main reference counts as
+    a neutral clip and wins ties."""
+    main = v.get("ref")
+    want = emotion or "neutral"
+    cands = [(r, r.get("emotion") or "neutral", False) for r in v.get("refs") or [] if r.get("audio")]
+    if main:
+        cands.append((main, "neutral", True))
+
+    def best(xs):
+        return max(xs, key=lambda c: (c[2], c[0].get("duration", 0)))[0]
+
+    if lang:
+        same = [c for c in cands if c[0].get("lang") == lang]
+        hit = [c for c in same if c[1] == want]
+        if hit:
+            return best(hit)
+        if same:  # a clip in the right language beats the right emotion in the wrong language
+            return best(same)
+    hit = [c for c in cands if c[1] == want]
+    return best(hit) if hit else main
 
 
 def emotions_of(v: dict[str, Any]) -> list[str]:
