@@ -1,4 +1,4 @@
-# ===== GTL-Audio-CharaVoice =====
+# ===== CharaVoice =====
 # Large or machine-local content never goes into git.
 /.venv/
 /engines/
