@@ -8,11 +8,14 @@ import { Models } from "./pages/Models";
 import { Material } from "./pages/Material";
 import { Train } from "./pages/Train";
 import { Settings } from "./pages/Settings";
+import { Simple } from "./pages/Simple";
 import { Stage } from "./pages/Stage";
 import { Voices } from "./pages/Voices";
 import { api } from "./api";
-import { go, missingAssets, page, refreshVoices, toast } from "./store";
+import { go, missingAssets, page, pendingRec, refreshVoices, remember, toast } from "./store";
 
+const SIMPLE_NAV = { id: "simple", label: "简易模式", icon: "M12 4v9M8.5 9.5 12 13l3.5-3.5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" };
+// everything else (voice library, emotions, voice tweaks, naturalness, agents) lives under 高级
 const NAV = [
   { id: "stage", label: "舞台", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z" },
   { id: "voices", label: "声音库", icon: "M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4" },
@@ -25,6 +28,14 @@ const NAV = [
 
 export default function App() {
   const [companion, setCompanion] = useState(false);
+  const [adv, setAdv] = useState(() => {
+    try {
+      return localStorage.getItem("cv.adv") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const showAdv = adv || page.value !== "simple";
   useEffect(() => {
     connect();
     const un = listen<boolean>("companion", (e) => setCompanion(e.payload));
@@ -40,6 +51,10 @@ export default function App() {
     return onEvent((ev) => {
       if (ev.type === "hello" || ev.type === "voices_changed") refreshVoices().catch(() => {});
       if (ev.type === "asset" && ev.status !== "running") checkAssets();
+      if (ev.type === "simple_recorded" && page.value !== "simple") {
+        pendingRec.value = { rec: ev.rec, seconds: ev.seconds };
+        go("simple");
+      }
     });
   }, [conn.value]);
 
@@ -63,7 +78,7 @@ export default function App() {
           <span class="brand-mark" />
           CharaVoice
         </div>
-        {NAV.map((n) => (
+        {[SIMPLE_NAV].map((n) => (
           <button key={n.id} class={`nav ${page.value === n.id ? "on" : ""}`} onClick={() => go(n.id)}>
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d={n.icon} />
@@ -71,6 +86,28 @@ export default function App() {
             {n.label}
           </button>
         ))}
+        <button
+          class="nav nav-group"
+          aria-expanded={showAdv}
+          onClick={() => {
+            const v = !showAdv;
+            setAdv(v);
+            remember("cv.adv", v ? "1" : "0");
+            if (!v && page.value !== "simple") go("simple");
+          }}
+        >
+          <span class={`chev ${showAdv ? "open" : ""}`}>›</span>
+          高级
+        </button>
+        {showAdv &&
+          NAV.map((n) => (
+            <button key={n.id} class={`nav sub ${page.value === n.id ? "on" : ""}`} onClick={() => go(n.id)}>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d={n.icon} />
+              </svg>
+              {n.label}
+            </button>
+          ))}
         <div class="grow" />
         <button
           class={`nav ${companion ? "on" : ""}`}
@@ -98,6 +135,7 @@ export default function App() {
             </button>
           </div>
         )}
+        {page.value === "simple" && <Simple />}
         {page.value === "models" && <Models />}
         {page.value === "stage" && <Stage />}
         {page.value === "voices" && <Voices />}

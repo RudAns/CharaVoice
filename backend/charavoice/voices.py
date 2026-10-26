@@ -136,7 +136,7 @@ def create(name: str, consent_kind: str, language: str = "zh", base: str | None 
 
 
 def update(vid: str, patch: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"name", "language", "params", "base", "avatar_mode", "tweak"}
+    allowed = {"name", "language", "params", "base", "avatar_mode", "tweak", "folder"}
     with _lock:
         v = _read(vid)
         for k, val in patch.items():
@@ -150,6 +150,8 @@ def update(vid: str, patch: dict[str, Any]) -> dict[str, Any]:
                 v["name"] = str(val).strip()
             elif k == "base":
                 v["base"] = val
+            elif k == "folder":
+                v["folder"] = bool(val)  # simple-mode material folder
             elif k == "avatar_mode" and val in ("circle", "free"):
                 v["avatar_mode"] = val
             elif k == "tweak" and isinstance(val, dict):

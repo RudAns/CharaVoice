@@ -95,6 +95,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "vad_model": "models/asr/silero_vad.onnx",
     },
     "compliance": {"metadata_tag": True, "watermark": True},
+    # simple mode: consent asked once; loopback device (None = default output); vocal separation on clone
+    "simple": {"consent_at": None, "device": None, "separate": True},
     # naturalness: punctuation pauses, breaths, dynamics, loudness, room (see natural.py)
     "natural": {
         "pauses": True, "comma": 0.2, "sentence": 0.45, "paragraph": 0.8, "jitter": 0.15,

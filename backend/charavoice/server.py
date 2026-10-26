@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI):
     from . import natural
 
     asyncio.create_task(asyncio.to_thread(natural.prewarm))
+    from . import simple as _simple
+
+    asyncio.create_task(asyncio.to_thread(_simple.gc_orphans))
     async with mcp_http.run():
         yield
     player.stop_all()
@@ -1307,3 +1310,209 @@ async def delete_asset(aid: str):
         await engine_for(aid).stop()
     await asyncio.to_thread(assets.remove, aid)
     return {"deleted": aid}
+
+
+# ---------------------------------------------------------------- simple mode (material folders, Japanese)
+from . import simple  # noqa: E402
+
+
+def _folder_or_404(vid: str) -> dict:
+    v = _voice_or_404(vid)
+    if not simple.is_folder(v):
+        raise ApiError(404, "不是素材文件夹。", "not_found")
+    return v
+
+
+@app.get("/v1/simple", dependencies=[Depends(auth)])
+async def simple_state():
+    return {"consent_at": simple.consent(), "folders": await asyncio.to_thread(simple.folders), "recording": simple.recording_now(),
+            "settings": config.load_settings()["simple"]}
+
+
+@app.post("/v1/simple/consent", dependencies=[Depends(auth)])
+async def simple_consent():
+    return {"consent_at": simple.set_consent()}
+
+
+class FolderBody(BaseModel):
+    name: str
+
+
+@app.post("/v1/simple/folders", dependencies=[Depends(auth)])
+async def simple_create_folder(body: FolderBody):
+    return simple.create_folder(body.name)
+
+
+@app.get("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
+async def simple_folder(vid: str):
+    _folder_or_404(vid)
+    return simple.folder_detail(vid)
+
+
+@app.patch("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
+async def simple_rename_folder(vid: str, body: FolderBody):
+    _folder_or_404(vid)
+    return simple.summary(voices.update(vid, {"name": body.name}))
+
+
+@app.delete("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
+async def simple_delete_folder(vid: str):
+    _folder_or_404(vid)
+    if (j := simple.jobs.get(vid)) and j.state == "running":
+        raise ApiError(409, "这个文件夹正在学习，请先取消。", "busy")
+    await asyncio.to_thread(simple.delete_folder, vid)
+    return {"deleted": vid}
+
+
+class SimpleRecord(BaseModel):
+    device: int | None = None
+
+
+@app.post("/v1/simple/record/toggle", dependencies=[Depends(auth)])
+async def simple_record_toggle(body: SimpleRecord | None = None):
+    try:
+        return await asyncio.to_thread(simple.record_toggle, body.device if body else None)
+    except PermissionError:
+        raise ApiError(403, "首次录制前请确认只录制本人或已获授权的声音。", "consent_required")
+
+
+@app.get("/v1/simple/recordings/{rid}/peaks", dependencies=[Depends(auth)])
+async def simple_rec_peaks(rid: str, per_second: int = 100):
+    return await asyncio.to_thread(simple.rec_peaks, rid, per_second)
+
+
+@app.get("/v1/simple/recordings/{rid}/audio", dependencies=[Depends(auth)])
+async def simple_rec_audio(rid: str):
+    return FileResponse(simple.rec_file(rid), media_type="audio/flac")
+
+
+@app.get("/v1/simple/recordings/{rid}/analyze", dependencies=[Depends(auth)])
+async def simple_rec_analyze(rid: str, folder: str | None = None):
+    return await asyncio.to_thread(simple.analyze, rid, folder)
+
+
+@app.delete("/v1/simple/recordings/{rid}", dependencies=[Depends(auth)])
+async def simple_rec_discard(rid: str):
+    return {"deleted": await asyncio.to_thread(simple.discard_recording, rid)}
+
+
+class ClipSave(BaseModel):
+    rec: str
+    ranges: list[list[float]]
+    name: str | None = None
+    tag: str | None = None
+    replace: str | None = Field(default=None, description="重新裁剪：替换这个片段")
+
+
+@app.post("/v1/simple/folders/{vid}/clips", dependencies=[Depends(auth)])
+async def simple_save_clip(vid: str, body: ClipSave):
+    _folder_or_404(vid)
+    return await asyncio.to_thread(simple.save_clip, vid, body.rec, body.ranges, body.name, body.tag, body.replace)
+
+
+@app.post("/v1/simple/folders/{vid}/import", dependencies=[Depends(auth)])
+async def simple_import(vid: str, files: list[UploadFile] = File(...)):
+    _folder_or_404(vid)
+    out = []
+    for f in files:
+        out.append(await asyncio.to_thread(simple.import_file, vid, f.filename or "audio", await f.read()))
+    return {"clips": out}
+
+
+class ImportPaths(BaseModel):
+    paths: list[str]
+
+
+@app.post("/v1/simple/folders/{vid}/import-paths", dependencies=[Depends(auth)])
+async def simple_import_paths(vid: str, body: ImportPaths):
+    """Files dropped onto the window (the desktop shell hands over local paths)."""
+    _folder_or_404(vid)
+    out, errors = [], []
+    for p in body.paths:
+        path = Path(p)
+        if not path.is_file():
+            errors.append(f"{path.name}：不是文件")
+            continue
+        try:
+            out.append(await asyncio.to_thread(simple.import_file, vid, path.name, None, path))
+        except ValueError as e:
+            errors.append(str(e))
+    return {"clips": out, "errors": errors}
+
+
+@app.get("/v1/simple/folders/{vid}/clips/{cid}/audio", dependencies=[Depends(auth)])
+async def simple_clip_audio(vid: str, cid: str):
+    _folder_or_404(vid)
+    return FileResponse(simple.clip_file(vid, cid), media_type="audio/wav")
+
+
+class ClipPatch(BaseModel):
+    name: str | None = None
+    tag: str | None = None
+
+
+@app.patch("/v1/simple/folders/{vid}/clips/{cid}", dependencies=[Depends(auth)])
+async def simple_patch_clip(vid: str, cid: str, body: ClipPatch):
+    _folder_or_404(vid)
+    return simple.patch_clip(vid, cid, body.name, body.tag)
+
+
+class ClipIds(BaseModel):
+    ids: list[str]
+    to: str | None = None
+
+
+@app.post("/v1/simple/folders/{vid}/clips/delete", dependencies=[Depends(auth)])
+async def simple_delete_clips(vid: str, body: ClipIds):
+    _folder_or_404(vid)
+    return {"deleted": simple.delete_clips(vid, body.ids)}
+
+
+@app.post("/v1/simple/folders/{vid}/clips/move", dependencies=[Depends(auth)])
+async def simple_move_clips(vid: str, body: ClipIds):
+    _folder_or_404(vid)
+    if not body.to:
+        raise ApiError(400, "请选择目标文件夹。")
+    _folder_or_404(body.to)
+    return {"moved": simple.move_clips(vid, body.to, body.ids)}
+
+
+class CloneBody(BaseModel):
+    train: bool = Field(True, description="素材够 1 分钟时训练 v2ProPlus；false 只做零样本")
+    separate: bool | None = Field(None, description="人声分离；省略按设置")
+
+
+@app.post("/v1/simple/folders/{vid}/clone", dependencies=[Depends(auth)])
+async def simple_clone(vid: str, body: CloneBody):
+    _folder_or_404(vid)
+    sep = body.separate if body.separate is not None else config.load_settings()["simple"]["separate"]
+    return simple.start_clone(vid, body.train, sep).public()
+
+
+@app.post("/v1/simple/folders/{vid}/clone/cancel", dependencies=[Depends(auth)])
+async def simple_clone_cancel(vid: str):
+    return {"cancelled": simple.cancel_clone(vid)}
+
+
+class ExportBody(BaseModel):
+    text: str
+    format: str = "wav"
+
+
+@app.post("/v1/simple/folders/{vid}/export", dependencies=[Depends(auth)])
+async def simple_export(vid: str, body: ExportBody):
+    _folder_or_404(vid)
+    try:
+        return await simple.export(vid, body.text, body.format)
+    except RuntimeError as e:
+        raise ApiError(502, str(e), "synthesis_failed")
+
+
+@app.post("/v1/simple/folders/{vid}/open", dependencies=[Depends(auth)])
+async def simple_open_folder(vid: str):
+    """Show the folder's clips in Explorer."""
+    _folder_or_404(vid)
+    d = simple.clip_dir(vid)
+    d.mkdir(parents=True, exist_ok=True)
+    os.startfile(str(d))  # type: ignore[attr-defined]  # Windows only, like the rest of the app
+    return {"opened": str(d)}

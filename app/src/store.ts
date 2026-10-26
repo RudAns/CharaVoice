@@ -4,7 +4,10 @@ import { api, type Voice } from "./api";
 
 export const voices = signal<Voice[]>([]);
 export const selectedId = signal<string>(safeGet("cv.voice") ?? "");
-export const page = signal<string>(safeGet("cv.page") ?? "stage");
+// The app always opens on the simple mode; advanced pages are one click away in the nav.
+export const page = signal<string>("simple");
+/** A hotkey recording that just stopped and waits for trimming (set from any page). */
+export const pendingRec = signal<{ rec: string; seconds: number } | null>(null);
 /** Required models/engines that are not installed yet (filled from /v1/assets). */
 export const missingAssets = signal<string[]>([]);
 export const toast = signal<{ text: string; kind: "info" | "error" } | null>(null);

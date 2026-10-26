@@ -29,12 +29,34 @@ struct Backend {
 /// Dictation hotkey candidates, tried in order at start-up.
 const DICTATION_HOTKEYS: &[&str] = &["ctrl+alt+space", "ctrl+shift+space", "alt+shift+d", "ctrl+alt+d"];
 
+/// Simple-mode recording hotkey candidates (Ctrl+Shift+R is left alone: browsers use it to reload).
+const RECORD_HOTKEYS: &[&str] = &["ctrl+alt+r", "ctrl+alt+shift+r", "alt+shift+r", "ctrl+alt+f9"];
+
 #[derive(Default)]
 struct Hotkey(Mutex<String>);
+
+/// The recording hotkey in effect and its id (to tell it apart from the dictation one).
+#[derive(Default)]
+struct RecordHotkey(Mutex<(String, u32)>);
 
 #[tauri::command]
 fn dictation_hotkey(app: AppHandle) -> String {
     app.state::<Hotkey>().0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn record_hotkey(app: AppHandle) -> String {
+    app.state::<RecordHotkey>().0.lock().unwrap().0.clone()
+}
+
+/// Bring the main window back (it may be minimized while recording a game or a video).
+#[tauri::command]
+fn show_main(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -235,6 +257,46 @@ fn build_dictation_window(app: &AppHandle, visible: bool) {
     }
 }
 
+/// Recording hotkey: the badge (red dot + timer) toggles the loopback recording itself, so it
+/// works while the main window is minimized.
+fn on_record_hotkey(app: &AppHandle) {
+    match app.get_webview_window("recbadge") {
+        Some(w) => {
+            let _ = w.show();
+            let _ = w.emit("record-hotkey", ());
+        }
+        // pre-creation failed at start-up: build it now, the page starts the recording once loaded
+        None => build_recbadge_window(app, true),
+    }
+}
+
+/// Small non-focusable badge at the top centre of the screen, shown while recording.
+fn build_recbadge_window(app: &AppHandle, visible: bool) {
+    let page = if visible { "index.html#recbadge-start" } else { "index.html#recbadge" };
+    let built = tauri::WebviewWindowBuilder::new(app, "recbadge", tauri::WebviewUrl::App(page.into()))
+        .title("CharaVoice 录制")
+        .inner_size(300.0, 60.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(visible)
+        .focused(false)
+        .focusable(false)
+        .build();
+    if let Ok(w) = built {
+        if let Ok(Some(m)) = w.primary_monitor() {
+            let area = m.work_area();
+            let size = w.outer_size().unwrap_or_default();
+            let x = area.position.x + (area.size.width as i32 - size.width as i32) / 2;
+            let y = area.position.y + (16.0 * m.scale_factor()) as i32;
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    }
+}
+
 /// Open or close the frameless, always-on-top companion window (ring + avatar only).
 #[tauri::command]
 async fn toggle_companion(app: AppHandle) -> Result<bool, String> {
@@ -302,9 +364,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        on_dictation_hotkey(app);
+                        if app.state::<RecordHotkey>().0.lock().unwrap().1 == shortcut.id() {
+                            on_record_hotkey(app);
+                        } else {
+                            on_dictation_hotkey(app);
+                        }
                     }
                 })
                 .build(),
@@ -312,6 +378,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Backend::default())
         .manage(Hotkey::default())
+        .manage(RecordHotkey::default())
         .setup(|app| {
             // Another program may already own a combination; take the first one that is free.
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -322,6 +389,14 @@ pub fn run() {
                     break;
                 }
             }
+            for key in RECORD_HOTKEYS {
+                let Ok(sc) = key.parse::<tauri_plugin_global_shortcut::Shortcut>() else { continue };
+                if app.global_shortcut().register(sc).is_ok() {
+                    *app.state::<RecordHotkey>().0.lock().unwrap() = (key.to_string(), sc.id());
+                    build_recbadge_window(app.handle(), false);
+                    break;
+                }
+            }
             Ok(())
         })
         .on_window_event(|w, e| {
@@ -329,7 +404,7 @@ pub fn run() {
                 let _ = w.app_handle().emit("companion", false);
             }
         })
-        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, tool_paths])
+        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, record_hotkey, show_main, tool_paths])
         .build(tauri::generate_context!())
         .expect("error while building CharaVoice")
         .run(|app, event| {

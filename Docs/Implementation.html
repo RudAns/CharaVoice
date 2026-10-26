@@ -128,6 +128,16 @@
   <tr><td>进度</td><td>s2 解析 <code>====&gt; Epoch: N</code>；s1 解析 Lightning 的 <code>Epoch N: xx%</code>。中断用 <code>taskkill /T</code> 结束整个进程树（含 DataLoader 子进程）。</td></tr>
 </table>
 
+<h3>简易模式：素材文件夹一键克隆（日语）</h3>
+<table>
+  <tr><th>要点</th><th>做法</th></tr>
+  <tr><td>数据</td><td>一个素材文件夹就是一个声音（<code>voice.json</code> 里 <code>folder: true</code>，语言固定 ja）。片段存在 <code>data/voices/&lt;id&gt;/clips/</code>，元数据在 <code>clips.json</code>（时长、标签、来源录音、截取区间、CAM++ 声纹）。被截取的原始录音以 FLAC 存在 <code>data/recordings/</code>，所以片段可以随时重新裁剪；没有片段引用的录音在删除片段时、或放置 3 天后自动清理。</td></tr>
+  <tr><td>快捷键录制</td><td>Tauri 全局快捷键按顺序尝试 Ctrl+Alt+R、Ctrl+Alt+Shift+R、Alt+Shift+R、Ctrl+Alt+F9（不用 Ctrl+Shift+R，它是浏览器的强制刷新）。按下后显示一个预先创建的、不抢焦点的置顶小条，由它调用 <code>/v1/simple/record/toggle</code>，所以主窗口最小化时也能用；停止后后端发 <code>simple_recorded</code> 事件，小条把主窗口还原，主窗口打开截取编辑器。同一次按键 700 ms 内只触发一次。</td></tr>
+  <tr><td>截取建议</td><td>Silero VAD 切出语音段，首尾建议 = 第一段开始前 0.2 秒到最后一段结束后 0.3 秒。每段（≥0.8 秒）算 CAM++ 声纹，返回段与段之间的相似度矩阵，以及与文件夹已有片段平均声纹的相似度。基准优先用文件夹已有片段，没有时用第一段，用户可以双击任意段改为基准；低于 0.5 的段默认去掉。JVNV 实测：同一女声各段 0.55-0.73，混入的男声 0.26-0.36。</td></tr>
+  <tr><td>一键克隆</td><td>把文件夹全部片段作为来源送进素材流水线（人声分离、切句、转写），语种统一标为 ja；取与整体平均声纹最接近的一半语句求目标声纹，删掉相似度低于 0.45 或质量分低于 15 的句子；挑 3-10 秒里质量分最高的一句作零样本参考（底模 V5 turbo）。有效语音 ≥1 分钟且用户选择训练时，再以 v2ProPlus 训练（<code>fresh</code>），训练期间合成暂停。片段集合的指纹记录在 <code>clips.json</code>，片段变化后界面提示“重新学习”。</td></tr>
+  <tr><td>朗读与导出</td><td>界面按 。！？ 和换行分句（过短的并入后句，超过 120 字在 、 处再切），逐句请求 <code>/v1/audio/speech</code>，播放第 i 句时预取 i+1、i+2，暂停 / 停止由界面控制。导出走 <code>/v1/simple/folders/&lt;id&gt;/export</code>：整篇分块合成、拼接后统一加水印和“AI 合成”元数据，写到 <code>data/exports/</code>。</td></tr>
+</table>
+
 <h2>6. 声线调节与自然度</h2>
 <svg viewBox="0 0 820 130" role="img" aria-label="合成后处理链">
   <g>

@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "CharaVoice",
-        "width": 1240,
-        "height": 800,
+        "width": 1320,
+        "height": 840,
         "minWidth": 980,
         "minHeight": 640,
         "center": true
