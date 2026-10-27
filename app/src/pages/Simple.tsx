@@ -1055,7 +1055,7 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
         {!mini && <div class="step-no">4</div>}
         <div class="step-title">{mini ? "试听" : "朗读"}</div>
         <div class="grow" />
-        <span class="muted">{LANG_NAME[lang]}声音 · {list.length} 句</span>
+        {folder && <span class="sm-voice-now" title="试听、按住说话（包括全局快捷键）都用这个声音">当前声音：<strong>{folder.name}</strong>（{LANG_NAME[lang]}）</span>}
       </div>
       {mini && state === "idle" ? (
         <input
@@ -1231,7 +1231,7 @@ function MicButton({ folder, disabled, onText }: { folder: Folder | null; disabl
         />
         自动念
       </label>
-      {key && <span class="muted">或按住 <kbd>{hotkeyLabel(key)}</kbd></span>}
+      {key && <span class="muted">或按住 <kbd>{hotkeyLabel(key)}</kbd>（用{folder ? `“${folder.name}”` : "当前声音"}念）</span>}
     </>
   );
 }
