@@ -111,7 +111,9 @@ function openEvents() {
       presence.value = ev.state;
       engine.value = ev.engine;
     } else if (ev.type === "state") presence.value = ev.state;
-    else if (ev.type === "engine") engine.value = ev;
+    // the status pill and readiness checks follow the main engine (GPT-SoVITS); OmniVoice reports
+    // its own state on the same event type
+    else if (ev.type === "engine" && (!ev.name || ev.name === "gpt-sovits")) engine.value = ev;
     else if (ev.type === "listen_start") listening.value = true;
     else if (ev.type === "listen_stop") listening.value = false;
     listeners.forEach((fn) => fn(ev));
