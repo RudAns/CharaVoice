@@ -11,6 +11,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, conn, engine, onEvent, url } from "../api";
 import { ClipEditor } from "../components/ClipEditor";
+import { Transcripts } from "../components/Transcripts";
 import { notify, pendingRec, remember } from "../store";
 import { hotkeyLabel } from "./Settings";
 
@@ -37,6 +38,8 @@ interface Folder {
   path: string;
   est: { zero_shot: number; train: number };
   read_speed?: number;
+  doubtful?: number;
+  texts_edited?: boolean;
 }
 interface Clip {
   id: string;
@@ -78,6 +81,7 @@ export function Simple() {
   const [devices, setDevices] = useState<{ index: number; name: string; default: boolean }[]>([]);
   const [device, setDevice] = useState<number | null>(null);
   const [separate, setSeparate] = useState(true);
+  const [showTr, setShowTr] = useState(false);
   const playing = useRef<HTMLAudioElement | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
 
@@ -555,10 +559,16 @@ export function Simple() {
                 {folder.cloned && ` 上次：${folder.cloned.mode === "trained" ? "训练" : "零样本"}，${mmss(folder.cloned.seconds)} 有效语音。`}
               </p>
               {folder.job?.state === "error" && <p class="error">{folder.job.message}</p>}
+              {folder.texts_edited && <p class="sm-warn">转写改过了：点“重新学习”让训练用上修改后的文字（参考文字已经生效）。</p>}
               <div class="btn-row">
                 <button class="primary" disabled={!folder.clips} onClick={clone}>
-                  {!folder.cloned ? "克隆这个声线" : folder.dirty ? "重新学习（有新片段）" : "重新学习"}
+                  {!folder.cloned ? "克隆这个声线" : folder.texts_edited ? "重新学习（转写已改）" : folder.dirty ? "重新学习（有新片段）" : "重新学习"}
                 </button>
+                {folder.cloned && (
+                  <button onClick={() => setShowTr(true)} title="查看、修改每句的日语转写和参考文字">
+                    转写{folder.doubtful ? <span class="sm-doubt-badge">{folder.doubtful} 句可能有误</span> : null}
+                  </button>
+                )}
                 <label class="check slim" title="录到的声音里有背景音乐、音效时保持打开">
                   <input type="checkbox" checked={separate} onChange={(e) => { const v = (e.target as HTMLInputElement).checked; setSeparate(v); api("/v1/settings", { method: "PATCH", json: { simple: { separate: v } } }).catch(() => {}); }} />
                   去除背景音乐
@@ -591,6 +601,16 @@ export function Simple() {
         <div class="drag-ghost" style={{ left: dragClip.x + 12, top: dragClip.y + 8 }}>
           {dragClip.clip.name} · {dragClip.clip.duration.toFixed(1)} 秒{dragClip.over && dragClip.over !== cur ? ` → ${folders.find((f) => f.id === dragClip.over)?.name}` : ""}
         </div>
+      )}
+      {showTr && folder && (
+        <Transcripts
+          folder={folder.id}
+          name={folder.name}
+          onClose={() => {
+            setShowTr(false);
+            loadAll().catch(() => {});
+          }}
+        />
       )}
       {consentAsk && <ConsentModal onOk={giveConsent} onCancel={() => setConsentAsk(false)} />}
       {ask && <AskModal ask={ask} onDone={(v) => { ask.resolve(v); setAsk(null); }} />}

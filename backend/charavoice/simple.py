@@ -120,12 +120,24 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "ready": bool(v.get("ref")),
         "trained": bool((v.get("weights") or {}).get("sovits")),
         "cloned": cloned,
-        "dirty": bool(cloned) and cloned.get("fingerprint") != _fingerprint(data["clips"]),
+        "dirty": bool(cloned) and (cloned.get("fingerprint") != _fingerprint(data["clips"])
+                                   or data.get("texts_edited", "") > cloned.get("at", "")),
+        "texts_edited": bool(cloned) and data.get("texts_edited", "") > cloned.get("at", ""),
         "job": j.public() if j else None,
         "path": str(clip_dir(vid).resolve()),
         "est": {"zero_shot": est_minutes(secs, False), "train": est_minutes(secs, True)},
         "read_speed": data.get("read_speed", READ_SPEED),
+        "doubtful": _doubtful_count(vid),
     }
+
+
+def _doubtful_count(vid: str) -> int:
+    try:
+        items = dataset.load(vid)["items"]
+    except KeyError:
+        return 0
+    return sum(1 for i in items if not i.get("deleted") and i.get("text", "") == i.get("asr_text", "")
+               and "asr_ja" in i and _doubt(i.get("text", ""), i["duration"], i["asr_ja"] or None))
 
 
 def folders() -> list[dict[str, Any]]:
@@ -518,74 +530,92 @@ def _clone(job: CloneJob) -> None:
     try:
         data = load_clips(vid)
         fingerprint = _fingerprint(data["clips"])
-        # 1. material pipeline over every clip of the folder (fresh each time)
-        job.update(stage="准备素材", progress=0.01)
-        dataset.clear(vid)
-        todo = []
-        for c in data["clips"]:
-            src = dataset.add_source(vid, c["name"] or c["id"], raw=(clip_dir(vid) / c["file"]).read_bytes())
-            todo.append((src["id"], src["name"], [(0.0, src["duration"])]))
-        djob = dataset.Job(voice=vid)
-        dataset.jobs[vid] = djob
-        t = threading.Thread(target=dataset._run, args=(djob, todo, job.separate), daemon=True)
-        t.start()
-        while t.is_alive():
-            t.join(0.5)
-            if job.cancel:
-                djob.cancel = True
-            job.update(stage=f"整理素材 · {djob.stage}", progress=round(0.02 + 0.38 * djob.progress, 3))
-        if djob.state == "cancelled" or job.cancel:
-            raise _Cancelled()
-        if djob.state != "done":
-            raise RuntimeError(djob.message or "素材处理失败。")
-        # 2. Japanese only; keep the folder's main speaker
-        job.update(stage="筛选说话人", progress=0.41)
-        _keep_main_speaker(vid)
-        # 3. zero-shot reference: the cleanest 3-10 s sentence
-        ref = _pick_ref(vid)
+        prev = data.get("cloned") or {}
+        reuse = prev.get("fingerprint") == fingerprint and bool(dataset.load(vid)["items"])
+        if reuse:
+            # same clips as last time: keep the processed sentences, the user's text corrections,
+            # their include/exclude choices and the reference; only (re)train
+            job.update(stage="沿用已整理的句子和修改过的转写", progress=0.4)
+        else:
+            _material(job, vid, data)
+            # 2. Japanese only; keep the folder's main speaker
+            job.update(stage="筛选说话人", progress=0.41)
+            _keep_main_speaker(vid)
+            job.update(stage="复核转写", progress=0.42)
+            _second_opinion(vid)
+        # 3. zero-shot reference: the cleanest 3-10 s sentence (kept if the user already set one)
+        v = voices.get(vid)
+        ref = v.get("ref") if reuse and v.get("ref") else _pick_ref(vid)
         if not ref:
             raise RuntimeError("没有识别出可用的日语语句。请确认片段里是清晰的人声。")
         secs = dataset.summary(vid)["seconds"]
         job.seconds = secs
-        v = voices.get(vid)
-        if not job.train or secs < dataset.MIN_TOTAL or not (v.get("weights") or {}).get("sovits"):
-            # zero-shot from now on (until a fine-tune finishes)
-            voices.set_weights(vid, None, None)
-            voices.update(vid, {"base": config.load_settings()["engine"].get("zero_shot_base", "v5turbo")})
-        _mark_cloned(vid, fingerprint, "zero-shot", secs)  # usable right away, also if training fails
-        mode = "zero-shot"
-        # 4. fine-tune with a minute or more of usable speech
-        if job.train and secs >= dataset.MIN_TOTAL:
-            job.update(phase="train", stage="训练（v2ProPlus）", progress=0.45)
-            try:
-                training.start(vid, {"base": TRAIN_BASE, "fresh": True})
-            except ValueError as e:
-                raise RuntimeError(f"{e}（零样本克隆已可用）") from e
-            while True:
-                time.sleep(1.0)
-                tj = training.jobs.get(vid)
-                if tj is None:
-                    break
-                if job.cancel:
-                    training.cancel(vid)
-                job.update(stage=f"训练 · {tj.stage_label}", progress=round(0.45 + 0.55 * tj.progress, 3))
-                if tj.status != "running":
-                    break
-            tj = training.jobs.get(vid)
-            if tj and tj.status == "done":
-                mode = "trained"
-                _mark_cloned(vid, fingerprint, mode, secs)
-            elif job.cancel or (tj and tj.status == "cancelled"):
-                raise _Cancelled()
-            else:
-                raise RuntimeError("训练失败：" + (tj.message if tj else "未知错误") + "（零样本克隆已可用）")
-        job.update(state="done", phase="done", mode=mode, progress=1.0, stage="完成",
-                   message="已用训练后的声线朗读。" if mode == "trained" else "已完成零样本克隆。")
+        _after_material(job, vid, fingerprint, secs)
     except _Cancelled:
         job.update(state="cancelled", stage="已取消", message="已取消。" + ("零样本克隆已可用。" if job.phase == "train" else ""))
     except Exception as e:
         log.exception("clone failed")
         job.update(state="error", stage="出错", message=str(e))
+
+
+def _material(job: CloneJob, vid: str, data: dict[str, Any]) -> None:
+    """Material pipeline over every clip of the folder (from scratch)."""
+    job.update(stage="准备素材", progress=0.01)
+    dataset.clear(vid)
+    todo = []
+    for c in data["clips"]:
+        src = dataset.add_source(vid, c["name"] or c["id"], raw=(clip_dir(vid) / c["file"]).read_bytes())
+        todo.append((src["id"], src["name"], [(0.0, src["duration"])]))
+    djob = dataset.Job(voice=vid, language=LANG)
+    dataset.jobs[vid] = djob
+    t = threading.Thread(target=dataset._run, args=(djob, todo, job.separate), daemon=True)
+    t.start()
+    while t.is_alive():
+        t.join(0.5)
+        if job.cancel:
+            djob.cancel = True
+        job.update(stage=f"整理素材 · {djob.stage}", progress=round(0.02 + 0.38 * djob.progress, 3))
+    if djob.state == "cancelled" or job.cancel:
+        raise _Cancelled()
+    if djob.state != "done":
+        raise RuntimeError(djob.message or "素材处理失败。")
+
+
+def _after_material(job: CloneJob, vid: str, fingerprint: str, secs: float) -> None:
+    v = voices.get(vid)
+    if not job.train or secs < dataset.MIN_TOTAL or not (v.get("weights") or {}).get("sovits"):
+        # zero-shot from now on (until a fine-tune finishes)
+        voices.set_weights(vid, None, None)
+        voices.update(vid, {"base": config.load_settings()["engine"].get("zero_shot_base", "v5turbo")})
+    _mark_cloned(vid, fingerprint, "zero-shot", secs)  # usable right away, also if training fails
+    mode = "zero-shot"
+    # 4. fine-tune with a minute or more of usable speech
+    if job.train and secs >= dataset.MIN_TOTAL:
+        job.update(phase="train", stage="训练（v2ProPlus）", progress=0.45)
+        try:
+            training.start(vid, {"base": TRAIN_BASE, "fresh": True})
+        except ValueError as e:
+            raise RuntimeError(f"{e}（零样本克隆已可用）") from e
+        while True:
+            time.sleep(1.0)
+            tj = training.jobs.get(vid)
+            if tj is None:
+                break
+            if job.cancel:
+                training.cancel(vid)
+            job.update(stage=f"训练 · {tj.stage_label}", progress=round(0.45 + 0.55 * tj.progress, 3))
+            if tj.status != "running":
+                break
+        tj = training.jobs.get(vid)
+        if tj and tj.status == "done":
+            mode = "trained"
+            _mark_cloned(vid, fingerprint, mode, secs)
+        elif job.cancel or (tj and tj.status == "cancelled"):
+            raise _Cancelled()
+        else:
+            raise RuntimeError("训练失败：" + (tj.message if tj else "未知错误") + "（零样本克隆已可用）")
+    job.update(state="done", phase="done", mode=mode, progress=1.0, stage="完成",
+               message="已用训练后的声线朗读。" if mode == "trained" else "已完成零样本克隆。")
 
 
 def _mark_cloned(vid: str, fingerprint: str, mode: str, seconds: float) -> None:
@@ -621,13 +651,174 @@ def _pick_ref(vid: str) -> dict[str, Any] | None:
     items = [i for i in dataset.load(vid)["items"] if not i.get("deleted") and i.get("text")]
     if not items:
         return None
-    good = [i for i in items if 3.0 <= i["duration"] <= 10.0] or items
+    sure = [i for i in items if not _doubt(i["text"], i["duration"], i.get("asr_ja") or None)] or items
+    good = [i for i in sure if 3.0 <= i["duration"] <= 10.0] or sure
     best = max(good, key=lambda i: (i["score"], i.get("similarity") or 0))
     ref_dir = voices.folder(vid) / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(dataset.ddir(vid) / "clips" / f"{best['id']}.wav", ref_dir / "ref.wav")
     voices.set_ref(vid, "ref/ref.wav", best["text"], LANG, best["duration"])
+    _tag_ref(vid, best["id"])
     return best
+
+
+# ------------------------------------------------------------------ transcripts
+_LATIN = re.compile(r"[A-Za-z]")
+_KANA_KANJI = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+
+
+_PUNCT = re.compile(r"[\s、。，,.！!？?…「」『』〜~ー]")
+_KANA = re.compile(r"[\u3040-\u30ff]")
+
+
+def _similar(a: str, b: str) -> float:
+    import difflib
+
+    return difflib.SequenceMatcher(None, _PUNCT.sub("", a), _PUNCT.sub("", b)).ratio()
+
+
+def _doubt(text: str, duration: float, alt: str | None = None) -> str | None:
+    """Why a transcript may be wrong, or None. SenseVoice reports no confidence, so the signal is
+    a second reading of the same audio with the language forced to Japanese (`alt`): where the
+    two readings disagree the recogniser was unsure. Plus plausibility checks."""
+    t = (text or "").strip()
+    if not t:
+        return "没有识别出文字"
+    if alt is not None and _similar(t, alt) < 0.9:
+        return "两次识别结果不一致"
+    if len(t) >= 2 and not _KANA.search(t):
+        return "没有假名，可能识别成了中文"
+    if re.search(r"[？?！!](?=[\u3040-\u309f])", t):
+        return "句中有多余的标点"
+    if _LATIN.search(t):
+        return "含有字母，可能识别成了别的语言"
+    jp = len(_KANA_KANJI.findall(t))
+    if jp < len(t.replace(" ", "")) * 0.6:
+        return "日语字符偏少"
+    rate = jp / max(duration, 0.1)
+    if rate < 2.5:
+        return "文字比声音短很多，可能漏字"
+    if rate > 11:
+        return "文字比声音长很多，可能多字"
+    if re.search(r"(.)\1{3,}", t):
+        return "同一个字连续重复"
+    return None
+
+
+def _second_opinion(vid: str) -> dict[str, str]:
+    """Japanese-forced transcript of every sentence (computed once, kept in items.json as asr_ja)."""
+    with dataset._lock:
+        d = dataset.load(vid)
+        todo = [i for i in d["items"] if "asr_ja" not in i]
+    got = {}
+    for i in todo:
+        try:
+            x = audio_util.decode(dataset.ddir(vid) / "clips" / f"{i['id']}.wav", 16000)
+            got[i["id"]] = asr.transcribe(x, LANG)["text"]
+        except Exception as e:  # missing clip or ASR model: no second opinion for this one
+            log.info("second transcript failed for %s: %s", i["id"], e)
+    if got:
+        with dataset._lock:
+            d = dataset.load(vid)
+            for i in d["items"]:
+                if i["id"] in got:
+                    i["asr_ja"] = got[i["id"]]
+            dataset.save(vid, d)
+    return {i["id"]: i.get("asr_ja", "") for i in dataset.load(vid)["items"]}
+
+
+def transcripts(vid: str) -> dict[str, Any]:
+    v = voices.get(vid)
+    if v.get("ref") and not v["ref"].get("item"):  # folders cloned before the link was recorded
+        same = [i for i in dataset.load(vid)["items"] if i.get("text") == v["ref"]["text"]]
+        if same:
+            _tag_ref(vid, same[0]["id"])
+            v = voices.get(vid)
+    alt = _second_opinion(vid)
+    items = []
+    for i in dataset.load(vid)["items"]:
+        a = alt.get(i["id"]) or None
+        text = i.get("text", "")
+        items.append({"id": i["id"], "text": text, "asr_text": i.get("asr_text", ""), "duration": i["duration"],
+                      "deleted": bool(i.get("deleted")), "score": i.get("score"), "similarity": i.get("similarity"),
+                      "edited": text != i.get("asr_text", ""),
+                      "suggest": a if a and _PUNCT.sub("", a) != _PUNCT.sub("", text) else None,
+                      # once the user has edited a sentence it is theirs: no more warnings
+                      "doubt": None if i.get("deleted") or text != i.get("asr_text", "") else _doubt(text, i["duration"], a)})
+    ref = v.get("ref")
+    ref_item = next((i for i in items if ref and i["id"] == ref.get("item")), None)
+    return {
+        "ref": {**ref, "doubt": ref_item["doubt"] if ref_item else _doubt(ref["text"], ref["duration"]),
+                "suggest": ref_item["suggest"] if ref_item else None} if ref else None,
+        "items": items,
+        "doubtful": sum(1 for i in items if i["doubt"]),
+    }
+
+
+def _mark_texts_edited(vid: str) -> None:
+    with _lock:
+        data = load_clips(vid)
+        data["texts_edited"] = voices.now_iso()
+        _save_clips(vid, data)
+
+
+def edit_transcript(vid: str, item_id: str, text: str | None = None, deleted: bool | None = None) -> dict[str, Any]:
+    patch = {}
+    if text is not None:
+        patch["text"] = text
+    if deleted is not None:
+        patch["deleted"] = deleted
+    item = dataset.edit_item(vid, item_id, patch)
+    v = voices.get(vid)
+    # the reference was copied from this sentence: keep its text in step
+    if text is not None and v.get("ref") and v["ref"].get("item") == item_id:
+        voices.set_ref(vid, v["ref"]["audio"], item["text"], LANG, v["ref"]["duration"])
+        _tag_ref(vid, item_id)
+    _mark_texts_edited(vid)
+    return item
+
+
+def set_ref_text(vid: str, text: str) -> dict[str, Any]:
+    v = voices.get(vid)
+    if not v.get("ref"):
+        raise ValueError("还没有参考音频，请先克隆。")
+    if not text.strip():
+        raise ValueError("参考文字不能为空。")
+    item = v["ref"].get("item")
+    voices.set_ref(vid, v["ref"]["audio"], text, LANG, v["ref"]["duration"])
+    if item:
+        _tag_ref(vid, item)
+        try:
+            dataset.edit_item(vid, item, {"text": text})
+            _mark_texts_edited(vid)
+        except KeyError:
+            pass
+    return voices.get(vid)["ref"]
+
+
+def use_as_ref(vid: str, item_id: str) -> dict[str, Any]:
+    import shutil
+
+    it = next((i for i in dataset.load(vid)["items"] if i["id"] == item_id), None)
+    if not it or not it.get("text"):
+        raise ValueError("这句没有文字，不能作为参考。")
+    ref_dir = voices.folder(vid) / "ref"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(dataset.ddir(vid) / "clips" / f"{item_id}.wav", ref_dir / "ref.wav")
+    voices.set_ref(vid, "ref/ref.wav", it["text"], LANG, it["duration"])
+    _tag_ref(vid, item_id)
+    return voices.get(vid)["ref"]
+
+
+def _tag_ref(vid: str, item_id: str) -> None:
+    """Remember which sentence the reference came from (voice.json, next to the ref)."""
+    p = voices.folder(vid) / "voice.json"
+    v = json.loads(p.read_text(encoding="utf-8"))
+    if v.get("ref"):
+        v["ref"]["item"] = item_id
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(v, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(p)
 
 
 # ------------------------------------------------------------------ export a whole article

@@ -94,6 +94,7 @@ class Job:
     message: str = ""
     started: float = field(default_factory=time.time)
     cancel: bool = False
+    language: str = ""  # transcribe in this language ("" = detect per sentence)
 
     def update(self, stage: str | None = None, progress: float | None = None, message: str | None = None) -> None:
         if stage is not None:
@@ -107,6 +108,7 @@ class Job:
     def public(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("cancel")
+        d.pop("language")
         return d
 
 
@@ -259,7 +261,7 @@ def _run(job: Job, todo: list[tuple[str, str, list[tuple[float, float]]]], separ
                     raise Cancelled()
                 job.update(stage=f"{_name}：{stage}", progress=_b + _s * frac)
 
-            _process_source(vid, sid, kept, separate, step)
+            _process_source(vid, sid, kept, separate, step, job.language)
         job.state = "done"
         s = summary(vid)
         job.update(stage="完成", progress=1.0, message=f"共 {s['usable']} 段可用，合计 {s['seconds']:.0f} 秒")
@@ -275,7 +277,7 @@ def _run(job: Job, todo: list[tuple[str, str, list[tuple[float, float]]]], separ
 GAP = 1.0  # seconds of silence between kept ranges in the trimmed working file
 
 
-def _process_source(vid: str, sid: str, kept: list[tuple[float, float]], separate: bool, step) -> None:
+def _process_source(vid: str, sid: str, kept: list[tuple[float, float]], separate: bool, step, language: str = "") -> None:
     work = ddir(vid) / "work"
     clips = ddir(vid) / "clips"
     clips.mkdir(parents=True, exist_ok=True)
@@ -322,7 +324,7 @@ def _process_source(vid: str, sid: str, kept: list[tuple[float, float]], separat
         seg16 = v16[a:b]
         cid = f"{sid}_{i:04d}"
         sf.write(str(clips / f"{cid}.wav"), np.clip(v32[a * 2 : b * 2], -1, 1), 32000, subtype="PCM_16")
-        r = asr.transcribe(seg16)
+        r = asr.transcribe(seg16, language)
         q = _quality(seg16, orig16[a:b], o16[a:b] if o16 is not None else None)
         emb = _embed(seg16)
         sim = float(np.dot(emb, target)) if target is not None else None

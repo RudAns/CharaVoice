@@ -1512,6 +1512,37 @@ async def simple_clone_cancel(vid: str):
     return {"cancelled": simple.cancel_clone(vid)}
 
 
+@app.get("/v1/simple/folders/{vid}/transcripts", dependencies=[Depends(auth)])
+async def simple_transcripts(vid: str):
+    _folder_or_404(vid)
+    return simple.transcripts(vid)
+
+
+class TranscriptPatch(BaseModel):
+    text: str | None = None
+    deleted: bool | None = None
+
+
+@app.patch("/v1/simple/folders/{vid}/transcripts/{item_id}", dependencies=[Depends(auth)])
+async def simple_edit_transcript(vid: str, item_id: str, body: TranscriptPatch):
+    _folder_or_404(vid)
+    it = simple.edit_transcript(vid, item_id, body.text, body.deleted)
+    return {k: v for k, v in it.items() if k != "embedding"}
+
+
+class RefBody(BaseModel):
+    text: str | None = Field(default=None, description="改参考音频的文字")
+    item: str | None = Field(default=None, description="把这一句设为参考音频")
+
+
+@app.post("/v1/simple/folders/{vid}/ref", dependencies=[Depends(auth)])
+async def simple_set_ref(vid: str, body: RefBody):
+    _folder_or_404(vid)
+    if body.item:
+        return simple.use_as_ref(vid, body.item)
+    return simple.set_ref_text(vid, body.text or "")
+
+
 class ExportBody(BaseModel):
     text: str
     format: str = "wav"

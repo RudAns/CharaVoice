@@ -521,3 +521,22 @@ canvas.ce-wave { flex: 1 1 0; height: 0; min-height: 190px; max-height: 340px; }
 .sm-speed { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .sm-speed input { flex: 1; max-width: 200px; }
 .sm-speed-val { font-variant-numeric: tabular-nums; min-width: 42px; color: #cbd5e1; }
+
+/* transcripts (simple mode) */
+.sm-warn { font-size: 12.5px; color: #fde68a; margin: 4px 0 8px; }
+.sm-doubt-badge { margin-left: 6px; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #3a2f12; color: #fde68a; border: 1px solid #5a4a1c; }
+.modal.transcripts { width: min(980px, 94vw); max-height: 88vh; gap: 10px; }
+.tr-ref { padding: 12px; border-radius: 12px; background: #11151f; border: 1px solid #2c3550; display: flex; flex-direction: column; gap: 8px; }
+.tr-ref-head { display: flex; align-items: center; gap: 10px; }
+.tr-note { font-size: 12.5px; line-height: 1.65; margin: 2px 0; }
+.tr-list { display: flex; flex-direction: column; gap: 4px; overflow: auto; min-height: 0; padding-right: 4px; }
+.tr-row { padding: 5px 8px; border-radius: 9px; background: rgba(24,29,42,.7); border: 1px solid #222839; display: flex; flex-direction: column; gap: 4px; }
+.tr-row.doubt { border-color: #5a4a1c; }
+.tr-row.out { opacity: .5; }
+.tr-row-edit { display: flex; align-items: center; gap: 8px; }
+.tr-row-edit input { flex: 1; min-width: 0; font-family: "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif; font-size: 14px; padding: 5px 8px; }
+.tr-hint { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: #aab2c6; padding-left: 38px; }
+.tr-hint button { margin-left: 6px; padding: 1px 8px; font-size: 12px; }
+.tr-doubt { color: #fde68a; }
+.tr-edited { color: #a7f3d0; }
+.tr-tag { font-size: 11.5px; color: #c4b5fd; border: 1px solid #3b3566; border-radius: 6px; padding: 2px 8px; }
