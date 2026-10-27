@@ -1075,6 +1075,26 @@ def use_model(vid: str, mid: str) -> dict[str, Any]:
     return m
 
 
+def _keep_only(vid: str, mid: str) -> None:
+    """Keep just the model in use: other versions and the per-epoch checkpoints are deleted
+    (the comparison audio under train/compare stays for listening)."""
+    import shutil
+
+    with _lock:
+        data = load_clips(vid)
+        keep = next(m for m in data.get("models", []) if m["id"] == mid)
+        used = {(voices.folder(vid) / keep["gpt"]).resolve(), (voices.folder(vid) / keep["sovits"]).resolve()}
+        for f in list((_weights_dir(vid) / "versions").rglob("*")):
+            if f.is_file() and f.resolve() not in used:
+                f.unlink()
+        for d in sorted((_weights_dir(vid) / "versions").glob("*"), reverse=True):
+            if d.is_dir() and not any(d.iterdir()):
+                shutil.rmtree(d, ignore_errors=True)
+        keep.pop("epochs", None)
+        data["models"] = [keep]
+        _save_clips(vid, data)
+
+
 # ------------------------------------------------------------------ retrain for less noise
 RETRAIN_S2_EPOCHS = 8   # every epoch is kept and measured; the previous run used 10
 COMPARE = {"sib": "静かな森の中で、少女はそっと空を見上げました。", "plain": "すみません、新しい小説はどこで探せますか。"}
@@ -1152,7 +1172,7 @@ async def compare_models(vid: str, entries: list[dict[str, str]], out_dir: Path)
 def start_retrain(vid: str) -> "CloneJob":
     """Retrain the folder's voice for less noise: archive the current model as a version, train on
     the cleaned set keeping every SoVITS epoch, then render and measure each epoch against the
-    previous model and switch to the best balance of noise and likeness (all stay selectable)."""
+    previous model, switch to the best balance of noise and likeness and keep only that one."""
     voices.get(vid)
     with _lock:
         j = jobs.get(vid)
@@ -1231,20 +1251,27 @@ def _retrain(job: "CloneJob") -> None:
         res = on_loop(compare_models(vid, entries, voices.folder(vid) / "train" / "compare"))
         # pick: the least hissy epoch that keeps at least 97 % of the previous model's likeness
         base_sim = res[0]["similarity"] if prev else max(r["similarity"] for r in res)
-        cands = [r for r in res if r.get("epoch") and r["similarity"] >= 0.97 * base_sim] or [r for r in res if r.get("epoch")]
+        # pick among the previous model and every new epoch: the least "electronic" fricatives that
+        # keep at least 97 % of the previous model's likeness; only the winner is kept
+        cands = [r for r in res if r["similarity"] >= 0.97 * base_sim] or res
         best = min(cands, key=lambda r: (r["flatness"], -r["similarity"]))
         with _lock:
             data = load_clips(vid)
-            data.setdefault("models", []).append({
-                "id": mid, "label": f"第 {len(data['models']) + 1} 版", "note": f"干净素材 {clean['seconds']:.0f} 秒，声码器第 {best['epoch']} 轮",
-                "gpt": best["gpt"], "sovits": best["sovits"], "base": TRAIN_BASE, "at": voices.now_iso(),
-                "epochs": [{k: r[k] for k in ("epoch", "sovits", "flatness", "hiss_db", "similarity")} for r in res if r.get("epoch")],
-            })
             data["retrain_report"] = {"clean": clean, "results": res, "picked": best["name"]}
+            if best.get("epoch"):
+                data.setdefault("models", []).append({
+                    "id": mid, "label": f"第 {len(data['models']) + 1} 版", "note": f"干净素材 {clean['seconds']:.0f} 秒，声码器第 {best['epoch']} 轮",
+                    "gpt": best["gpt"], "sovits": best["sovits"], "base": TRAIN_BASE, "at": voices.now_iso(),
+                })
             _save_clips(vid, data)
-        use_model(vid, mid)
-        job.update(state="done", phase="done", mode="trained", progress=1.0, stage="完成",
-                   message=f"已切到第 2 版（声码器第 {best['epoch']} 轮）。不满意可以在“模型版本”里换回第 1 版。")
+        keep = mid if best.get("epoch") or not prev else prev["id"]
+        use_model(vid, keep)
+        _keep_only(vid, keep)
+        if best.get("epoch"):
+            msg = f"已换成新模型（声码器第 {best['epoch']} 轮：嘶声 {best['hiss_db']} dB，像度 {best['similarity']}）。"
+        else:
+            msg = "新训练的各轮都没有比原来的模型更好，保留原模型。"
+        job.update(state="done", phase="done", mode="trained", progress=1.0, stage="完成", message=msg)
     except _Cancelled:
         job.update(state="cancelled", stage="已取消", message="已取消。")
     except Exception as e:

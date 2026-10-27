@@ -252,6 +252,9 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
     """Begin synthesis (and playback). Raises LookupError/ValueError for bad input.
 
     tweak / preset adjust the voice on top of its saved defaults (see voicefx)."""
+    from . import idle
+
+    idle.touch()
     text = (text or "").strip()
     if not text:
         raise ValueError("要说的文字不能为空。")
@@ -259,10 +262,12 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
         raise ValueError("文字太长（上限 4000 字）。请分段调用。")
     v = voices.find(voice)
     base = config.load_settings().get("natural") or {}
-    if v.get("folder"):  # simple-mode voices: own de-esser setting, and possibly OmniVoice instead
+    if v.get("folder"):  # material-library voices: Japanese, own speed / de-esser / quality mode
         from . import simple
 
         base = {**base, **simple.deess_cfg(v["id"])}
+        language = language or simple.LANG
+        speed = speed or simple.read_speed(v["id"])
         v = simple.route(v)
     req = build_request(v, text, language, speed, streaming_mode, emotion)
     tw = voicefx.resolve(v.get("tweak"), preset, tweak)

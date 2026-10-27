@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "preact/hooks";
 import { api, engine } from "../api";
-import { notify } from "../store";
+import { notify, setShowAdvanced, showAdvanced } from "../store";
+import { ServiceCard } from "../components/ServiceCard";
 
 interface Device {
   index: number;
@@ -41,6 +42,15 @@ export function Settings() {
   return (
     <div class="page doc">
       <h2>设置</h2>
+      <div class="card">
+        <label class="check">
+          <input type="checkbox" checked={showAdvanced.value} onChange={(e) => setShowAdvanced((e.target as HTMLInputElement).checked)} />
+          显示高级功能
+        </label>
+        <p class="muted small-note">舞台、声音库、情绪参考、声线调节、自然度、模型管理等更细的功能。平时只用素材库、训练和接入 Agent 就够了。</p>
+      </div>
+      <h3>后台服务与显存</h3>
+      <ServiceCard editable />
 
       <h3>声音引擎（GPT-SoVITS）</h3>
       <div class="card">

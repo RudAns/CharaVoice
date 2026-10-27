@@ -51,6 +51,8 @@ export const connError = signal<string>("");
 export const presence = signal<Presence>("idle");
 export const engine = signal<EngineInfo | null>(null);
 export const listening = signal(false);
+/** The user stopped the background service from the app: do not reconnect (that would start it again). */
+export const serviceStopped = signal(false);
 
 type Listener = (ev: any) => void;
 const listeners = new Set<Listener>();
@@ -120,6 +122,10 @@ function openEvents() {
   };
   ws.onclose = () => {
     ws = null;
+    if (serviceStopped.value) {
+      conn.value = null;
+      return;
+    }
     setTimeout(() => connect(), 1500);
   };
 }

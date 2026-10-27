@@ -68,7 +68,9 @@ const lsGet = (k: string) => {
 type Ask = { title: string; label: string; value: string; ok: string; resolve: (v: string | null) => void };
 type Confirm = { title: string; body: preact.ComponentChildren; actions: { label: string; kind?: string; value: string }[]; resolve: (v: string | null) => void };
 
-export function Simple() {
+// The same component renders two pages: the material library (folders, recording, trimming,
+// clips) and training (voice status, learning, transcript review, a small try-out box).
+export function Simple({ view = "library" }: { view?: "library" | "train" }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [cur, setCur] = useState<string>(lsGet("cv.folder") ?? "");
   const [clips, setClips] = useState<Clip[]>([]);
@@ -336,7 +338,7 @@ export function Simple() {
           去掉伴奏特别重的句子、对其余句子轻度降噪，再训练一次；声码器每一轮都保存下来逐轮试听比较，自动选“底噪最少、又不失音色”的那一轮。
           会占用显卡大约 <strong>5 分钟</strong>，期间朗读暂停，可以随时取消。
         </p>
-        <p class="muted">现在的模型会保存为“第 1 版”，训完不满意可以一键换回。</p>
+        <p class="muted">训完会和现在的模型一起比较，只保留选出的那一个，其余的检查点自动删除。</p>
       </>,
       [
         { label: "取消", value: "" },
@@ -400,23 +402,25 @@ export function Simple() {
     : job
       ? `学习中 ${Math.round(job.progress * 100)}%`
       : folder.trained
-        ? "已训练"
+        ? "已就绪 · 训练版"
         : folder.ready
-          ? "零样本克隆"
-          : "还没学习";
+          ? "已就绪 · 零样本"
+          : "未训练";
 
   return (
     <div class="page simple">
       <header class="sm-head">
-        <h2>简易模式</h2>
-        <span class="muted">日语声线克隆 · 录制 → 截取 → 克隆 → 朗读</span>
+        <h2>{view === "library" ? "素材库" : "训练"}</h2>
+        <span class="muted">
+          {view === "library" ? "一个文件夹就是一个要克隆的人或角色：录制、截取、整理声音片段" : "用文件夹里的全部片段学习声线（日语），训练好的声音可以接入 Agent"}
+        </span>
       </header>
-      <div class={`sm-grid ${editing ? "editing" : ""}`}>
+      <div class={`sm-grid ${view} ${editing ? "editing" : ""}`}>
         {/* ---------------- folders */}
         <aside class="sm-folders card">
           <div class="list-head">
-            <strong>素材文件夹</strong>
-            <button class="small" onClick={newFolder}>＋ 新建</button>
+            <strong>{view === "library" ? "素材文件夹" : "声音"}</strong>
+            {view === "library" && <button class="small" onClick={newFolder}>＋ 新建</button>}
           </div>
           <div class="sm-flist">
             {folders.length === 0 && <p class="muted sm-empty">一个文件夹就是一个要克隆的人或角色。先新建一个，再录制他（她）的声音。</p>}
@@ -431,15 +435,16 @@ export function Simple() {
                 >
                   <div class="sf-top">
                     <span class="sf-name">{f.name}</span>
-                    <span class={`sf-state ${fj ? "run" : f.trained ? "trained" : f.ready ? "zs" : ""}`}>
-                      {fj ? `${Math.round(fj.progress * 100)}%` : f.trained ? "已训练" : f.ready ? "零样本" : "未学习"}
+                    <span class={`sf-state ${fj ? "run" : f.ready ? "trained" : ""}`}>
+                      {fj ? `训练中 ${Math.round(fj.progress * 100)}%` : f.ready ? "已就绪" : "未训练"}
                     </span>
                   </div>
                   <div class="sf-meta">
                     {f.clips} 段 · {mmss(f.seconds)}
-                    {f.dirty && <span class="sf-dirty"> · 有新片段</span>}
+                    {view === "train" && f.cloned && ` · ${f.cloned.at.slice(5, 16).replace("T", " ")} 训练`}
+                    {f.dirty && <span class="sf-dirty"> · 有新素材</span>}
                   </div>
-                  {f.id === cur && (
+                  {view === "library" && f.id === cur && (
                     <div class="sf-actions">
                       <button class="small" onClick={(e) => { e.stopPropagation(); renameFolder(f); }}>重命名</button>
                       <button class="small" onClick={(e) => { e.stopPropagation(); api(`/v1/simple/folders/${f.id}/open`, { method: "POST" }).catch((er) => notify(er.message, "error")); }}>打开</button>
@@ -450,10 +455,11 @@ export function Simple() {
               );
             })}
           </div>
-          <p class="muted sm-tip">可以把 wav / mp3 文件直接拖到文件夹上导入；把片段拖到另一个文件夹即可移动。</p>
+          {view === "library" && <p class="muted sm-tip">可以把 wav / mp3 文件直接拖到文件夹上导入；把片段拖到另一个文件夹即可移动。</p>}
         </aside>
 
         {/* ---------------- 1 record */}
+        {view === "library" && (
         <section class="card sm-step sm-rec">
           <div class="step-no">1</div>
           <div class="sm-rec-body">
@@ -493,13 +499,20 @@ export function Simple() {
             </button>
           </div>
         </section>
+        )}
 
         {/* ---------------- 2 trim / clips */}
+        {view === "library" && (
         <section class="card sm-step sm-clips">
           <div class="step-head">
             <div class="step-no">2</div>
             <div class="step-title">{editing ? "截取" : `片段${folder ? ` · ${folder.name}` : ""}`}</div>
             <div class="grow" />
+            {!editing && folder?.cloned && (
+              <button class="small" onClick={() => setShowTr(true)} title="查看、修改切出的每句日语转写">
+                转写{folder.doubtful ? <span class="sm-doubt-badge">{folder.doubtful} 句可能有误</span> : null}
+              </button>
+            )}
             {!editing && folder && (
               <label class="file-btn small">
                 导入文件
@@ -569,15 +582,25 @@ export function Simple() {
             </div>
           )}
         </section>
+        )}
 
-        {/* ---------------- 3 clone */}
+        {/* ---------------- 3 train */}
+        {view === "train" && (
         <section class="card sm-step sm-clone">
           <div class="step-head">
-            <div class="step-no">3</div>
-            <div class="step-title">克隆</div>
+            <div class="step-title">{folder ? folder.name : "训练"}</div>
             <div class="grow" />
-            {folder && <span class={`sf-state ${job ? "run" : folder.trained ? "trained" : folder.ready ? "zs" : ""}`}>{status}</span>}
+            {folder && <span class={`sf-state ${job ? "run" : folder.ready ? "trained" : ""}`}>{status}</span>}
           </div>
+          {folder && (
+            <div class="tr-facts">
+              <span>素材 <strong>{mmss(folder.seconds)}</strong>（{folder.clips} 段）</span>
+              {folder.cloned && <span>有效语音 <strong>{mmss(folder.cloned.seconds)}</strong></span>}
+              {folder.cloned && <span>上次训练 <strong>{folder.cloned.at.slice(0, 16).replace("T", " ")}</strong></span>}
+              {folder.ready && <span>方式 <strong>{folder.trained ? "训练（v2ProPlus）" : "零样本"}</strong></span>}
+            </div>
+          )}
+          {folder && folder.seconds === 0 && <p class="muted">这个文件夹还没有片段，先到“素材库”录制、截取几段声音。</p>}
           {!folder ? (
             <p class="muted">选择一个素材文件夹。</p>
           ) : job ? (
@@ -611,11 +634,12 @@ export function Simple() {
                 </div>
               )}
               {folder.texts_edited && <p class="sm-warn">转写改过了：点“重新学习”让训练用上修改后的文字（参考文字已经生效）。</p>}
+              {folder.dirty && !folder.texts_edited && <p class="sm-warn">素材有变化：点“重新学习”把新片段学进去。</p>}
               <div class="btn-row">
                 <button class="primary" disabled={!folder.clips} onClick={clone}>
                   {!folder.cloned ? "克隆这个声线" : folder.texts_edited ? "重新学习（转写已改）" : folder.dirty ? "重新学习（有新片段）" : "重新学习"}
                 </button>
-                {folder.cloned && (
+                {folder.cloned && view === "train" && (
                   <button onClick={() => setShowTr(true)} title="查看、修改每句的日语转写和参考文字">
                     转写{folder.doubtful ? <span class="sm-doubt-badge">{folder.doubtful} 句可能有误</span> : null}
                   </button>
@@ -633,9 +657,10 @@ export function Simple() {
             </>
           )}
         </section>
+        )}
 
-        {/* ---------------- 4 read */}
-        <ReadCard folder={folder} busy={!!job} />
+        {/* ---------------- 4 try it */}
+        {view === "train" && <ReadCard folder={folder} busy={!!job} mini />}
       </div>
 
       {menu && (
@@ -768,6 +793,7 @@ export function sentences(text: string): string[] {
   return out;
 }
 
+const TRY_SAMPLE = "こんにちは。今日はいい天気ですね、少し散歩に行きませんか。";
 const SAMPLE = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。";
 
 /** Read a streamed WAV response (header with unknown length, then 16-bit PCM) chunk by chunk. */
@@ -810,8 +836,8 @@ async function* pcmChunks(r: Response): AsyncGenerator<{ sr: number; pcm: Float3
   }
 }
 
-function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
-  const [text, setText] = useState(() => lsGet("cv.simple.text") ?? SAMPLE);
+function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy: boolean; mini?: boolean }) {
+  const [text, setText] = useState(() => lsGet(mini ? "cv.try.text" : "cv.simple.text") ?? (mini ? TRY_SAMPLE : SAMPLE));
   const [state, setState] = useState<"idle" | "playing" | "paused">("idle");
   const [idx, setIdx] = useState(-1);
   const [waiting, setWaiting] = useState(false);
@@ -982,14 +1008,29 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
   }
 
   return (
-    <section class="card sm-step sm-read">
+    <section class={`card sm-step sm-read ${mini ? "mini" : ""}`}>
       <div class="step-head">
-        <div class="step-no">4</div>
-        <div class="step-title">朗读</div>
+        {!mini && <div class="step-no">4</div>}
+        <div class="step-title">{mini ? "试听" : "朗读"}</div>
         <div class="grow" />
         <span class="muted">日语 · {list.length} 句</span>
       </div>
-      {state === "idle" ? (
+      {mini && state === "idle" ? (
+        <input
+          class="sm-try"
+          lang="ja"
+          value={text}
+          placeholder="输入一句日语，听听效果"
+          onInput={(e) => {
+            const v = (e.target as HTMLInputElement).value;
+            setText(v);
+            try {
+              localStorage.setItem("cv.try.text", v);
+            } catch {}
+          }}
+          onKeyDown={(e) => e.key === "Enter" && ready && !busy && start()}
+        />
+      ) : state === "idle" ? (
         <textarea
           class="sm-text"
           lang="ja"
@@ -999,7 +1040,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
             const v = (e.target as HTMLTextAreaElement).value;
             setText(v);
             try {
-              localStorage.setItem("cv.simple.text", v);
+              localStorage.setItem(mini ? "cv.try.text" : "cv.simple.text", v);
             } catch {}
           }}
         />
@@ -1010,26 +1051,26 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
           ))}
         </div>
       )}
-      <div class="sm-speed">
-        <span>音质</span>
-        <div class="seg">
-          <button class={mode === "trained" ? "on" : ""} disabled={switching} onClick={() => changeMode("trained")} title="用这个文件夹训练 / 克隆出的声线，速度最快">
-            标准
-          </button>
-          <button class={mode === "omnivoice" ? "on" : ""} disabled={switching} onClick={() => changeMode("omnivoice")} title="用 OmniVoice 从文件夹里最干净的几句零样本克隆：s、sh 更自然，音色稍微没那么像">
-            音质优先
-          </button>
+      <details class="sm-more" open={!mini}>
+        <summary>{mini ? "朗读设置（语速、音质、去齿音，对 Agent 调用同样生效）" : "更多设置"}</summary>
+        <div class="sm-speed">
+          <span>音质</span>
+          <div class="seg">
+            <button class={mode === "trained" ? "on" : ""} disabled={switching} onClick={() => changeMode("trained")} title="用这个文件夹训练 / 克隆出的声线，速度最快">
+              标准
+            </button>
+            <button class={mode === "omnivoice" ? "on" : ""} disabled={switching} onClick={() => changeMode("omnivoice")} title="用 OmniVoice 从文件夹里最干净的几句零样本克隆：s、sh 更自然，音色稍微没那么像">
+              音质优先
+            </button>
+          </div>
+          {mode === "omnivoice" && <span class="muted">OmniVoice · 合成会慢一些</span>}
         </div>
-        {mode === "omnivoice" && <span class="muted">OmniVoice · 合成会慢一些</span>}
-      </div>
-      <label class="sm-speed">
-        <span>语速</span>
-        <input type="range" min="0.7" max="1.2" step="0.05" value={speed} onInput={(e) => changeSpeed(+(e.target as HTMLInputElement).value)} />
-        <span class="sm-speed-val">{speed.toFixed(2)}×</span>
-        {speed !== 0.9 && <button class="small" onClick={() => changeSpeed(0.9)}>默认</button>}
-      </label>
-      <details class="sm-more">
-        <summary>更多设置</summary>
+        <label class="sm-speed">
+          <span>语速</span>
+          <input type="range" min="0.7" max="1.2" step="0.05" value={speed} onInput={(e) => changeSpeed(+(e.target as HTMLInputElement).value)} />
+          <span class="sm-speed-val">{speed.toFixed(2)}×</span>
+          {speed !== 0.9 && <button class="small" onClick={() => changeSpeed(0.9)}>默认</button>}
+        </label>
         <div class="sm-speed" title="压低过重的 s、sh 齿音。轻 / 中只压超出这个声线平常齿音水平的部分；强会连正常的齿音也压一些">
           <span>去齿音</span>
           <div class="seg">
@@ -1048,7 +1089,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
           </div>
         </div>
       </details>
-      {!ready && folder && <p class="muted">先完成第 3 步克隆，才能用这个声线朗读。</p>}
+      {!ready && folder && <p class="muted">{mini ? "训练完成后就能在这里试听。" : "先完成第 3 步克隆，才能用这个声线朗读。"}</p>}
       {ready && mode === "trained" && eng?.state !== "ready" && (
         <p class="muted">
           语音引擎{eng?.state === "starting" ? "正在启动…" : "未启动。"}
@@ -1057,7 +1098,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
       )}
       <div class="btn-row">
         {state === "idle" ? (
-          <button class="primary" disabled={!ready || busy || !list.length} onClick={start}>▶ 朗读</button>
+          <button class="primary" disabled={!ready || busy || !list.length} onClick={start}>▶ {mini ? "试听" : "朗读"}</button>
         ) : (
           <>
             <button class="primary" onClick={pause}>{state === "playing" ? "❚❚ 暂停" : "▶ 继续"}</button>
@@ -1066,8 +1107,10 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
           </>
         )}
         <div class="grow" />
+        {!mini && <>
         <button class="small" disabled={!ready || busy || !!exporting || !text.trim()} onClick={() => exportAs("wav")}>{exporting === "wav" ? "导出中…" : "导出 WAV"}</button>
         <button class="small" disabled={!ready || busy || !!exporting || !text.trim()} onClick={() => exportAs("mp3")}>{exporting === "mp3" ? "导出中…" : "导出 MP3"}</button>
+        </>}
       </div>
     </section>
   );

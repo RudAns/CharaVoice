@@ -100,7 +100,9 @@ def find(name_or_id: str | None) -> dict[str, Any]:
     for v in voices:
         if v["id"] == default:
             return v
-    return voices[0]
+    # no default chosen: prefer a ready material-library voice over older test voices
+    ready_folders = [v for v in voices if v.get("folder") and v.get("ref")]
+    return ready_folders[0] if ready_folders else voices[0]
 
 
 def create(name: str, consent_kind: str, language: str = "zh", base: str | None = None) -> dict[str, Any]:

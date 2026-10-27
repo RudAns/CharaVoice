@@ -97,6 +97,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "compliance": {"metadata_tag": True, "watermark": True},
     # simple mode: consent asked once; loopback device (None = default output); vocal separation on clone
     "simple": {"consent_at": None, "device": None, "separate": True},
+    # GPU courtesy: unload the voice engines after this many idle minutes, and exit the background
+    # backend after this many when no app window is open (0 = never); see idle.py
+    "idle": {"unload_minutes": 10, "exit_minutes": 60},
     # naturalness: punctuation pauses, breaths, dynamics, loudness, room (see natural.py)
     "natural": {
         "pauses": True, "comma": 0.2, "sentence": 0.45, "paragraph": 0.8, "jitter": 0.15,

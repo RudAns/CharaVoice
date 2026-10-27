@@ -24,6 +24,14 @@ struct Backend {
     log: Mutex<Vec<String>>,
     /// Serializes backend_info so two windows never spawn two backends.
     starting: tokio::sync::Mutex<()>,
+    /// The user stopped the background service from the app: no window may start it again
+    /// until they press "restart" (agents still start it through MCP).
+    paused: std::sync::atomic::AtomicBool,
+}
+
+#[tauri::command]
+fn set_backend_paused(app: AppHandle, paused: bool) {
+    app.state::<Backend>().paused.store(paused, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Dictation hotkey candidates, tried in order at start-up.
@@ -178,6 +186,9 @@ async fn backend_info(app: AppHandle) -> Result<BackendInfo, String> {
     let state = app.state::<Backend>();
     let _guard = state.starting.lock().await;
     let home = home_dir();
+    if state.paused.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("后台服务已停止".into());
+    }
     if let Some(info) = read_runtime(&home) {
         if healthy(&info.base_url) {
             let managed = app.state::<Backend>().child.lock().unwrap().is_some();
@@ -404,7 +415,7 @@ pub fn run() {
                 let _ = w.app_handle().emit("companion", false);
             }
         })
-        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, record_hotkey, show_main, tool_paths])
+        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, record_hotkey, show_main, tool_paths, set_backend_paused])
         .build(tauri::generate_context!())
         .expect("error while building CharaVoice")
         .run(|app, event| {

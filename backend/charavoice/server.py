@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI):
     from . import natural
 
     asyncio.create_task(asyncio.to_thread(natural.prewarm))
+    from . import idle
+
+    asyncio.create_task(idle.loop())
     from . import simple as _simple
 
     asyncio.create_task(asyncio.to_thread(_simple.gc_orphans))
@@ -745,7 +748,10 @@ async def ws_events(ws: WebSocket):
         await ws.close(code=4401, reason="unauthorized")
         return
     await ws.accept()
+    from . import idle
+
     q = bus.subscribe(maxsize=512)
+    idle.ui_clients += 1
     try:
         await ws.send_json({"type": "hello", "state": bus.state, "engine": engine.info(), "listening": asr.listener.active})
         while True:
@@ -754,6 +760,7 @@ async def ws_events(ws: WebSocket):
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
+        idle.ui_clients -= 1
         bus.unsubscribe(q)
 
 
@@ -1153,7 +1160,7 @@ async def well_known():
             "voices": {"method": "GET", "path": "/v1/voices"},
             "openapi": {"method": "GET", "path": "/openapi.json"},
         },
-        "mcp": {"stdio": "charavoice-mcp", "streamable_http": "/mcp", "tools": ["speak", "list_voices", "listen", "transcribe"]},
+        "mcp": {"stdio": "charavoice-mcp", "streamable_http": "/mcp", "tools": ["list_voices", "speak", "synthesize", "stop"]},
         "naturalness": {"field": "naturalness", "values": ["on", "off", "{pauses, breaths, dynamics, loudness, room}"]},
         "voice_tweak": {"fields": ["pitch", "formant", "brightness", "breath", "preset"], "info": "/v1/voicefx"},
         "agent_binding": {"header": "X-CharaVoice-Agent", "body_field": "agent", "mcp": "client name from initialize, or CHARAVOICE_AGENT",
@@ -1570,6 +1577,98 @@ class ModelBody(BaseModel):
 async def simple_use_model(vid: str, body: ModelBody):
     _folder_or_404(vid)
     return simple.use_model(vid, body.id)
+
+
+# ---------------------------------------------------------------- MCP page / tools (material-library voices)
+def _folder_voices() -> list[dict]:
+    return [v for v in voices.list_all() if simple.is_folder(v)]
+
+
+@app.get("/v1/simple/mcp/voices", dependencies=[Depends(auth)])
+async def simple_mcp_voices(request: Request, agent: str = ""):
+    """Voices as the MCP list_voices tool shows them: the material-library folders."""
+    default = voices.find(None)["id"] if voices.list_all() else None
+    bound = None
+    if agent:
+        a = next((x for x in agents.all_agents() if x["name"] == agents.clean(agent)), None)
+        bound = a.get("voice") if a else None
+    out = []
+    for v in _folder_voices():
+        s = simple.summary(v)
+        job = s["job"] if s["job"] and s["job"]["state"] == "running" else None
+        out.append({"voice": v["id"], "name": v["name"], "language": simple.LANG,
+                    "status": "training" if job else "ready" if s["ready"] else "not trained",
+                    "default": v["id"] == default, "yours": v["id"] == bound})
+    return {"voices": out, "default": default}
+
+
+class SynthBody(BaseModel):
+    text: str
+    voice: str | None = None
+    format: str = "wav"
+    agent: str | None = None
+
+
+@app.post("/v1/simple/synthesize", dependencies=[Depends(auth)])
+async def simple_synthesize(body: SynthBody, request: Request):
+    """Text to an audio file in data/exports (MCP synthesize tool)."""
+    bound_voice, _ = _bound(request, body.agent, "mcp")
+    vid = _pick_voice(body.voice) or bound_voice or voices.find(None)["id"]
+    try:
+        r = await simple.export(vid, body.text, body.format)
+    except RuntimeError as e:
+        raise ApiError(502, str(e), "synthesis_failed")
+    return {**r, "voice": vid}
+
+
+@app.post("/v1/simple/mcp/test", dependencies=[Depends(auth)])
+async def simple_mcp_test():
+    """Act as an agent once: connect to this backend's MCP endpoint over Streamable HTTP, call
+    list_voices and speak a short sentence, and report what happened and how long it took."""
+    import httpx as _httpx
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    url = RUNTIME.get("base_url", "http://127.0.0.1:9870") + "/mcp"
+    headers = {"Authorization": f"Bearer {RUNTIME.get('agent_token', '')}", "X-CharaVoice-Agent": "charavoice-test"}
+    t0 = time.monotonic()
+    async with _httpx.AsyncClient(headers=headers, timeout=120) as hc:
+        async with streamable_http_client(url, http_client=hc) as streams:
+            async with ClientSession(streams[0], streams[1]) as s:
+                await s.initialize()
+                tools = [t.name for t in (await s.list_tools()).tools]
+                lv = await s.call_tool("list_voices", {})
+                t1 = time.monotonic()
+                sp = await s.call_tool("speak", {"text": "テストです。聞こえますか？", "wait": True})
+                t2 = time.monotonic()
+    text = lambda r: " ".join(getattr(c, "text", "") for c in r.content)
+    return {"ok": not lv.is_error and not sp.is_error, "tools": tools, "list_voices": text(lv)[:600],
+            "speak": text(sp), "connect_ms": int((t1 - t0) * 1000), "speak_ms": int((t2 - t1) * 1000)}
+
+
+# ---------------------------------------------------------------- background service (GPU courtesy)
+@app.get("/v1/service", dependencies=[Depends(auth)])
+async def service_status():
+    from . import idle
+
+    return await asyncio.to_thread(idle.status)
+
+
+@app.post("/v1/service/unload", dependencies=[Depends(auth)])
+async def service_unload():
+    """Free the GPU now; the engine loads again on the next request."""
+    from . import idle
+
+    return {"unloaded": await idle.unload("(requested)")}
+
+
+@app.post("/v1/service/stop", dependencies=[Depends(auth)])
+async def service_stop():
+    """Stop the background service (engines and backend). Agents start it again when they call."""
+    from . import idle
+
+    asyncio.get_running_loop().call_later(0.3, lambda: asyncio.ensure_future(idle.shutdown()))
+    return {"stopping": True}
 
 
 class ExportBody(BaseModel):

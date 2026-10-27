@@ -105,24 +105,30 @@ scripts\build-installer.bat
 
 ### MCP
 
-Streamable HTTP（CharaVoice 开着就能用，不需要另起进程）：
+软件里的“接入 Agent”页会按本机实际路径生成 Claude Code、Claude Desktop、Cursor 的配置，一键复制即可。声音就是“素材库”里训练好的文件夹，说日语。
 
-```bat
-claude mcp add --transport http charavoice http://127.0.0.1:9870/mcp --header "Authorization: Bearer <Agent 口令>"
-```
-
-stdio（由 Agent 启动一个小进程转发；安装版用 `charavoice-backend.exe mcp`，源码版用 `.venv\Scripts\charavoice-mcp.exe`）：
+stdio（推荐）：Agent 启动 CharaVoice 的 MCP 程序。软件没开也能用：第一次调用时会在后台（无窗口）自动启动 CharaVoice；软件或后台已经在运行时直接复用，不会重复加载模型。安装版的程序是 `charavoice-backend.exe mcp`，源码版是 `.venv\Scripts\charavoice-mcp.exe`：
 
 ```bat
 claude mcp add charavoice -- "<CharaVoice 安装目录>\backend\charavoice-backend.exe" mcp
 ```
 
+Streamable HTTP（需要 CharaVoice 正在运行）：
+
+```bat
+claude mcp add --transport http charavoice http://127.0.0.1:9870/mcp --header "Authorization: Bearer <Agent 口令>"
+```
+
 | 工具 | 参数 | 作用 |
 | --- | --- | --- |
-| `speak` | `text`，可选 `voice`、`language`、`wait`、`low_latency`、`emotion`、`pitch`、`formant`、`brightness`、`breath`、`preset`、`naturalness` | 用角色声音在本机说出来；不传 `voice` 时用界面里给这个 Agent 分配的声音 |
-| `list_voices` | 无 | 列出可用声音及各自支持的情绪 |
-| `listen` | 可选 `timeout` | 听用户说一句话，返回文字和语种 |
-| `transcribe` | `path`，可选 `language` | 把本机的音视频文件转成文字，含分段时间 |
+| `list_voices` | 无 | 列出训练好的声音：`voice`（传给其他工具的 id）、名字、状态、是否默认 |
+| `speak` | `text`，可选 `voice`、`wait` | 用这个声音在本机念出日语；不传 `voice` 时用给这个 Agent 绑定的声音，没有绑定就用默认声音 |
+| `synthesize` | `text`，可选 `voice`、`format`（wav / mp3） | 生成音频文件（带 AI 标记和水印），返回文件路径和时长 |
+| `stop` | 无 | 停止正在播放的语音 |
+
+语速、去齿音、音质方式按“训练”页里该声音的朗读设置。实测（RTX 3060，训练过的声音）：引擎已加载时 0.2-0.8 秒出声；后台刚启动或模型刚被卸载后，第一句要等引擎加载，约 15 秒。
+
+**显存与后台**：空闲 10 分钟后自动卸载模型、释放显存（约 3.5 GB），下次调用时自动重新加载；软件窗口关着时空闲 1 小时，后台自动退出，Agent 下次调用时再自动启动。两个时间都可以在“设置”里改（0 = 不自动）。“接入 Agent”页和“设置”页显示后台是否在运行、模型是否占着显存，并可以“立即释放显存”或“停止后台服务”。
 
 ### 命令行
 
@@ -134,7 +140,7 @@ charavoice-backend.exe listen --timeout 15
 charavoice-backend.exe voices
 ```
 
-源码版把 `charavoice-backend.exe` 换成 `.venv\Scripts\charavoice.exe`。后端没运行时命令会立即报错并以退出码 2 结束，不会卡住。
+源码版把 `charavoice-backend.exe` 换成 `.venv\Scripts\charavoice.exe`。后端没运行时会先在后台自动启动它；启动失败才报错并以退出码 2 结束。
 
 ### HTTP（兼容 OpenAI 格式）
 
