@@ -40,6 +40,7 @@ interface Folder {
   read_speed?: number;
   doubtful?: number;
   deess?: "off" | "light" | "medium" | "strong";
+  mode?: "trained" | "omnivoice";
   texts_edited?: boolean;
 }
 interface Clip {
@@ -763,6 +764,8 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
   const [exporting, setExporting] = useState<string | null>(null);
   const [speed, setSpeed] = useState(folder?.read_speed ?? 0.9);
   const [deess, setDeess] = useState(folder?.deess ?? "medium");
+  const [mode, setMode] = useState(folder?.mode ?? "trained");
+  const [switching, setSwitching] = useState(false);
   const speedRef = useRef(speed);
   speedRef.current = speed;
   const saveTimer = useRef(0);
@@ -774,18 +777,34 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
   useEffect(() => {
     setSpeed(folder?.read_speed ?? 0.9);
     setDeess(folder?.deess ?? "medium");
+    setMode(folder?.mode ?? "trained");
     return () => stop();
   }, [folder?.id]);
   // load the voice before the first read (weights + first inference), so it starts within a second
   useEffect(() => {
-    if (folder?.ready && eng?.state === "ready") api(`/v1/simple/folders/${folder.id}/warm`, { method: "POST" }).catch(() => {});
-  }, [folder?.id, folder?.ready, eng?.state]);
+    if (folder?.ready) api(`/v1/simple/folders/${folder.id}/warm`, { method: "POST" }).catch(() => {});
+  }, [folder?.id, folder?.ready, mode]);
 
   function changeSpeed(v: number) {
     setSpeed(v);
     clearTimeout(saveTimer.current);
     const id = folder?.id;
     saveTimer.current = window.setTimeout(() => id && api(`/v1/simple/folders/${id}`, { method: "PATCH", json: { read_speed: v } }).catch(() => {}), 400);
+  }
+
+  async function changeMode(v: "trained" | "omnivoice") {
+    if (!folder || v === mode) return;
+    stop();
+    setSwitching(true);
+    try {
+      await api(`/v1/simple/folders/${folder.id}`, { method: "PATCH", json: { mode: v } });
+      setMode(v);
+      notify(v === "omnivoice" ? "已切换到音质优先（OmniVoice），首次会加载引擎，稍等十几秒" : "已切换回训练版声线");
+    } catch (e: any) {
+      notify(e.message, "error");
+    } finally {
+      setSwitching(false);
+    }
   }
 
   function changeDeess(v: "off" | "light" | "medium" | "strong") {
@@ -937,6 +956,18 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
           ))}
         </div>
       )}
+      <div class="sm-speed">
+        <span>音质</span>
+        <div class="seg">
+          <button class={mode === "trained" ? "on" : ""} disabled={switching} onClick={() => changeMode("trained")} title="用这个文件夹训练 / 克隆出的声线，速度最快">
+            标准
+          </button>
+          <button class={mode === "omnivoice" ? "on" : ""} disabled={switching} onClick={() => changeMode("omnivoice")} title="用 OmniVoice 从文件夹里最干净的几句零样本克隆：s、sh 更自然，音色稍微没那么像">
+            音质优先
+          </button>
+        </div>
+        {mode === "omnivoice" && <span class="muted">OmniVoice · 合成会慢一些</span>}
+      </div>
       <label class="sm-speed">
         <span>语速</span>
         <input type="range" min="0.7" max="1.2" step="0.05" value={speed} onInput={(e) => changeSpeed(+(e.target as HTMLInputElement).value)} />
@@ -964,7 +995,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
         </div>
       </details>
       {!ready && folder && <p class="muted">先完成第 3 步克隆，才能用这个声线朗读。</p>}
-      {ready && eng?.state !== "ready" && (
+      {ready && mode === "trained" && eng?.state !== "ready" && (
         <p class="muted">
           语音引擎{eng?.state === "starting" ? "正在启动…" : "未启动。"}
           {eng?.state !== "starting" && <button class="small" onClick={() => api("/v1/engine/start", { method: "POST" }).catch((e) => notify(e.message, "error"))}>启动引擎</button>}

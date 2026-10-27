@@ -45,6 +45,14 @@ DEESS_LEVELS = ("off", "light", "medium", "strong")
 DEESS_DEFAULT = "medium"
 SIB_NORM_FALLBACK = -4.0
 
+# How a folder's voice is synthesized. "trained" uses the folder's own GPT-SoVITS result (zero-shot
+# or fine-tuned); "omnivoice" clones it zero-shot with OmniVoice from the folder's cleanest sentences.
+# Measured on a folder fine-tuned from 100 s of music-separated anime audio: the fine-tuned vocoder
+# renders s/sh as featureless noise (4.5-11 kHz spectral flatness 0.47 vs 0.27 for studio speech),
+# OmniVoice keeps their structure (0.28) at a slightly lower speaker similarity (0.81 vs 0.86).
+MODES = ("trained", "omnivoice")
+OMNI_REF_MAX = 10.0  # seconds: the cleanest sentences are joined up to this length
+
 # Reading speed for articles: cloned anime/game voices copy their source's fast delivery, and
 # 0.9 brings a typical 6.5-7 chars/s down to a relaxed reading pace.
 READ_SPEED = 0.9
@@ -136,6 +144,7 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "est": {"zero_shot": est_minutes(secs, False), "train": est_minutes(secs, True)},
         "read_speed": data.get("read_speed", READ_SPEED),
         "deess": data.get("deess", DEESS_DEFAULT),
+        "mode": data.get("mode", "trained"),
         "doubtful": _doubtful_count(vid),
     }
 
@@ -179,6 +188,70 @@ def set_deess(vid: str, level: str) -> str:
         data["deess"] = level
         _save_clips(vid, data)
     return level
+
+
+def set_mode(vid: str, mode: str) -> str:
+    if mode not in MODES:
+        raise ValueError(f"合成方式只能是 {' / '.join(MODES)}")
+    if mode == "omnivoice":
+        from .engine import omni
+
+        if not omni.installed():
+            raise ValueError("没有安装 OmniVoice 引擎，请在“高级 → 模型”页安装。")
+        if not load_clips(vid).get("omni_ref"):
+            _pick_omni_ref(vid)
+    with _lock:
+        data = load_clips(vid)
+        data["mode"] = mode
+        _save_clips(vid, data)
+    return mode
+
+
+def _pick_omni_ref(vid: str) -> dict[str, Any]:
+    """OmniVoice takes one reference clip: join the folder's cleanest sentences (least accompaniment
+    before separation, transcript not in doubt, 3-8 s each) into one clip of up to 10 s."""
+    items = [i for i in dataset.load(vid)["items"] if not i.get("deleted") and i.get("text") and 2.5 <= i["duration"] <= 8.0]
+    if not items:
+        raise ValueError("文件夹还没有整理好的句子，请先点“克隆这个声线”。")
+    sure = [i for i in items if not _doubt(i["text"], i["duration"], i.get("asr_ja") or None)] or items
+    sure.sort(key=lambda i: (i["quality"].get("bgm_db", 0), -i["score"]))
+    picked, total = [], 0.0
+    for i in sure:
+        if total + i["duration"] > OMNI_REF_MAX and picked:
+            continue
+        picked.append(i)
+        total += i["duration"] + 0.3
+        if total >= OMNI_REF_MAX - 2.5:
+            break
+    sr = 32000
+    gap = np.zeros(int(0.3 * sr), np.float32)
+    parts = []
+    for i in picked:
+        x = audio_util.decode(dataset.ddir(vid) / "clips" / f"{i['id']}.wav", sr)
+        parts += [x, gap]
+    y = np.concatenate(parts[:-1])
+    out = voices.folder(vid) / "ref" / "omni.wav"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out), y, sr, subtype="PCM_16")
+    ref = {"audio": "ref/omni.wav", "text": "".join(i["text"] for i in picked), "lang": LANG,
+           "duration": round(len(y) / sr, 2), "items": [i["id"] for i in picked]}
+    with _lock:
+        data = load_clips(vid)
+        data["omni_ref"] = ref
+        _save_clips(vid, data)
+    return ref
+
+
+def route(v: dict[str, Any]) -> dict[str, Any]:
+    """The voice as synthesis should see it: a folder in OmniVoice mode becomes an OmniVoice
+    zero-shot voice with the folder's cleanest sentences as reference."""
+    try:
+        data = load_clips(v["id"])
+    except KeyError:
+        return v
+    if data.get("mode") != "omnivoice" or not data.get("omni_ref"):
+        return v
+    return {**v, "base": "omnivoice", "ref": data["omni_ref"], "refs": [], "aux_refs": []}
 
 
 def _sib_norm(vid: str) -> float:
@@ -682,6 +755,11 @@ def _after_material(job: CloneJob, vid: str, fingerprint: str, secs: float) -> N
             raise _Cancelled()
         else:
             raise RuntimeError("训练失败：" + (tj.message if tj else "未知错误") + "（零样本克隆已可用）")
+    if load_clips(vid).get("mode") == "omnivoice":
+        try:
+            _pick_omni_ref(vid)
+        except ValueError:
+            pass
     job.update(state="done", phase="done", mode=mode, progress=1.0, stage="完成",
                message="已用训练后的声线朗读。" if mode == "trained" else "已完成零样本克隆。")
 

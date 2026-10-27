@@ -258,13 +258,14 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
     if len(text) > 4000:
         raise ValueError("文字太长（上限 4000 字）。请分段调用。")
     v = voices.find(voice)
-    req = build_request(v, text, language, speed, streaming_mode, emotion)
-    tw = voicefx.resolve(v.get("tweak"), preset, tweak)
     base = config.load_settings().get("natural") or {}
-    if v.get("folder"):  # simple-mode voices carry their own de-esser setting
+    if v.get("folder"):  # simple-mode voices: own de-esser setting, and possibly OmniVoice instead
         from . import simple
 
         base = {**base, **simple.deess_cfg(v["id"])}
+        v = simple.route(v)
+    req = build_request(v, text, language, speed, streaming_mode, emotion)
+    tw = voicefx.resolve(v.get("tweak"), preset, tweak)
     nat = natural.resolve(base, naturalness)
     if play is None:
         play = bool(config.load_settings()["speech"]["play_locally"])
