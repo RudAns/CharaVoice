@@ -42,6 +42,7 @@ interface Folder {
   deess?: "off" | "light" | "medium" | "strong";
   language?: "ja" | "zh" | "en";
   lang_auto?: boolean;
+  speak_lang?: "auto" | "ja" | "zh" | "en";
   mode?: "trained" | "omnivoice";
   models?: { id: string; label: string; note: string }[];
   model?: string | null;
@@ -441,7 +442,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
       <header class="sm-head">
         <h2>{view === "library" ? "素材库" : "训练"}</h2>
         <span class="muted">
-          {view === "library" ? "一个文件夹就是一个要克隆的人或角色：录制、截取、整理声音片段" : "用文件夹里的全部片段学习声线（日语、中文、英语按文件夹设置），训练好的声音可以接入 Agent"}
+          {view === "library" ? "一个文件夹就是一个要克隆的人或角色：录制、截取、整理声音片段" : "用文件夹里的全部片段学习这个人的声线；训练好的声音日语、中文、英语都能说，也可以接入 Agent"}
         </span>
       </header>
       <div class={`sm-grid ${view} ${editing ? "editing" : ""}`}>
@@ -464,7 +465,9 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
                 >
                   <div class="sf-top">
                     <span class="sf-name">{f.name}</span>
-                    <span class="sf-lang" title={f.lang_auto ? "第一段片段保存后自动识别" : "素材语言"}>{f.lang_auto ? "待识别" : LANG_NAME[f.language ?? "ja"]}</span>
+                    <span class="sf-lang" title={f.lang_auto ? "第一段片段保存后自动识别" : "素材语言：这个人在素材里说的语言；克隆后日语、中文、英语都能说，素材语言最像"}>
+                      素材{f.lang_auto ? "待识别" : LANG_NAME[f.language ?? "ja"]}
+                    </span>
                     <span class={`sf-state ${fj ? "run" : f.ready ? "trained" : ""}`}>
                       {fj ? `训练中 ${Math.round(fj.progress * 100)}%` : f.ready ? "已就绪" : "未训练"}
                     </span>
@@ -628,7 +631,20 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
               <span>素材 <strong>{mmss(folder.seconds)}</strong>（{folder.clips} 段）</span>
               {folder.cloned && <span>有效语音 <strong>{mmss(folder.cloned.seconds)}</strong></span>}
               {folder.cloned && <span>上次训练 <strong>{folder.cloned.at.slice(0, 16).replace("T", " ")}</strong></span>}
-              <span>语言 <strong>{folder.lang_auto ? "待识别" : LANG_NAME[folder.language ?? "ja"]}</strong></span>
+              <span>素材语言 <strong>{folder.lang_auto ? "待识别" : LANG_NAME[folder.language ?? "ja"]}</strong></span>
+              {folder.ready && (
+                <span title="补充该语言的素材会更像">
+                  可以说{" "}
+                  <strong>
+                    {(["ja", "zh", "en"] as const)
+                      .slice()
+                      .sort((a, b) => (a === folder.language ? -1 : b === folder.language ? 1 : 0))
+                      .map((l) => (l === folder.language ? `${LANG_NAME[l]}（最像）` : LANG_NAME[l]))
+                      .join(" · ")}
+                  </strong>
+                  <span class="muted">（其他语言补充该语言的素材会更像）</span>
+                </span>
+              )}
               {folder.ready && <span>方式 <strong>{folder.trained ? "训练（v2ProPlus）" : "零样本"}</strong></span>}
             </div>
           )}
@@ -876,6 +892,7 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
   const lang = folder?.language ?? "ja";
   const [text, setText] = useState(() => (mini ? TRY_SAMPLES[lang] : lsGet("cv.simple.text") ?? SAMPLE));
   const [heard, setHeard] = useState<{ language?: string; warn?: string | null } | null>(null);
+  const [speakLang, setSpeakLang] = useState(folder?.speak_lang ?? "auto");
   const [state, setState] = useState<"idle" | "playing" | "paused">("idle");
   const [idx, setIdx] = useState(-1);
   const [waiting, setWaiting] = useState(false);
@@ -896,6 +913,7 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
     setSpeed(folder?.read_speed ?? 0.9);
     if (mini) setText(lsGet(`cv.try.${folder?.id}`) ?? TRY_SAMPLES[folder?.language ?? "ja"]);
     setHeard(null);
+    setSpeakLang(folder?.speak_lang ?? "auto");
     // the push-to-talk hotkey reads back in the voice open on this page
     if (mini && folder?.ready) api("/v1/settings", { method: "PATCH", json: { ptt: { voice: folder.id } } }).catch(() => {});
     setDeess(folder?.deess ?? "medium");
@@ -927,6 +945,11 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
     } finally {
       setSwitching(false);
     }
+  }
+
+  function changeSpeakLang(v: "auto" | "ja" | "zh" | "en") {
+    setSpeakLang(v);
+    if (folder) api(`/v1/simple/folders/${folder.id}`, { method: "PATCH", json: { speak_lang: v } }).catch((e) => notify(e.message, "error"));
   }
 
   function changeDeess(v: "off" | "light" | "medium" | "strong") {
@@ -1073,7 +1096,31 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
           }}
           onKeyDown={(e) => e.key === "Enter" && ready && !busy && start()}
         />
-      ) : state === "idle" ? (
+      ) : null}
+      {mini && state === "idle" && (
+        <div class="sm-langs">
+          <span>念的语言</span>
+          <div class="seg">
+            {(["auto", "ja", "zh", "en"] as const).map((l) => (
+              <button class={speakLang === l ? "on" : ""} onClick={() => changeSpeakLang(l)} title={l === "auto" ? "按输入的文字判断（按住说话时跟随识别出的语言）" : `一律按${LANG_NAME[l]}念`}>
+                {l === "auto" ? "自动" : LANG_NAME[l]}
+              </button>
+            ))}
+          </div>
+          <span class="muted">示例：</span>
+          {(["ja", "zh", "en"] as const).map((l) => (
+            <button class="small" onClick={() => { setText(TRY_SAMPLES[l]); setHeard(null); }}>
+              {LANG_NAME[l]}
+            </button>
+          ))}
+        </div>
+      )}
+      {mini && state === "idle" && (
+        <p class="muted small-note">
+          一个声音训练好后，日语、中文、英语都能说，输入什么语言就念什么语言。素材是{LANG_NAME[lang]}，说{LANG_NAME[lang]}最像；其他语言会少像一些、可能带口音，补充该语言的素材会更像。
+        </p>
+      )}
+      {mini ? null : state === "idle" ? (
         <textarea
           class="sm-text"
           lang={lang}

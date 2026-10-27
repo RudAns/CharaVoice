@@ -192,6 +192,7 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "mode": data.get("mode", "trained"),
         "language": v.get("language") if v.get("language") in LANGS else LANG,
         "lang_auto": bool(data.get("lang_auto")),
+        "speak_lang": data.get("speak_lang", "auto"),
         "models": [{k: m[k] for k in ("id", "label", "note")} for m in data.get("models", [])],
         "model": data.get("model"),
         "doubtful": _doubtful_count(vid),
@@ -262,6 +263,26 @@ def _detect_language(vid: str, wav: Path) -> None:
         data["lang_auto"] = False
         _save_clips(vid, data)
     log.info("folder %s: detected language %s", vid, lang)
+
+
+def set_speak_lang(vid: str, lang: str) -> str:
+    """The language this voice reads in when the caller does not say: auto (from the text) or ja / zh / en."""
+    if lang not in ("auto",) + LANGS:
+        raise ValueError("念的语言只能是 auto / ja / zh / en")
+    with _lock:
+        data = load_clips(vid)
+        data["speak_lang"] = lang
+        _save_clips(vid, data)
+    return lang
+
+
+def speak_lang(vid: str) -> str | None:
+    """A fixed reading language chosen for this voice, or None for automatic."""
+    try:
+        lang = load_clips(vid).get("speak_lang", "auto")
+    except KeyError:
+        return None
+    return lang if lang in LANGS else None
 
 
 def set_read_speed(vid: str, speed: float) -> float:

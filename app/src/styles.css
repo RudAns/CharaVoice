@@ -565,3 +565,4 @@ canvas.ce-wave { flex: 1 1 0; height: 0; min-height: 190px; max-height: 340px; }
 .mic-btn.working { opacity: .8; }
 .sm-voice-now { font-size: 13px; color: #aab2c6; }
 .sm-voice-now strong { color: #e8ebf3; }
+.sm-langs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12.5px; }

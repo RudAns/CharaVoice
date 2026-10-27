@@ -1369,6 +1369,7 @@ class FolderPatch(BaseModel):
     deess: str | None = Field(default=None, description="去齿音强度：off / light / medium / strong")
     mode: str | None = Field(default=None, description="合成方式：trained（训练版）/ omnivoice（音质优先）")
     language: str | None = Field(default=None, description="素材语言：ja / zh / en（改了要重新学习）")
+    speak_lang: str | None = Field(default=None, description="念的语言：auto / ja / zh / en")
 
 
 @app.patch("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
@@ -1382,6 +1383,8 @@ async def simple_patch_folder(vid: str, body: FolderPatch):
         await asyncio.to_thread(simple.set_mode, vid, body.mode)
     if body.language is not None:
         simple.set_language(vid, body.language)
+    if body.speak_lang is not None:
+        simple.set_speak_lang(vid, body.speak_lang)
     v = voices.update(vid, {"name": body.name}) if body.name else voices.get(vid)
     return simple.summary(v)
 
@@ -1715,7 +1718,9 @@ async def ptt_stop(body: PttStop | None = None):
     if not speak_it or not r["text"]:
         return {**r, "spoken": False}
     vid = _pick_voice(body.voice or s.get("voice")) or voices.find(None)["id"]
-    job = speech.start(r["text"], vid, None, play=True)
+    lang = simple.speak_lang(vid) if simple.is_folder(voices.get(vid)) else None
+    lang = lang or (r["language"] if r["language"] in simple.LANGS else None)
+    job = speech.start(r["text"], vid, lang, play=True)
     started = await asyncio.to_thread(_wait_any, job.utterance, 120.0) if job.utterance else False
     warn = None
     if job.voice.get("folder"):
