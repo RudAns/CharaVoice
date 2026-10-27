@@ -535,9 +535,15 @@ async def speak(body: SpeakBody, request: Request):
         if job.error:
             raise EngineUnavailable(job.error, "synthesis_failed")
     seconds = round(sum(len(c) for c in job.chunks) / job.sr, 2) if job.sr else None
+    warn = None
+    if job.voice.get("folder"):
+        from . import simple as _simple
+
+        warn = _simple.accent_warning(_simple.lang_of(job.voice["id"]), job.request.text_lang)
     return {
         "id": utt.id,
         "voice": job.voice["id"],
+        "accent_warning": warn,
         "language": job.request.text_lang,
         "emotion": body.emotion or "neutral",
         "started": started,
@@ -1160,7 +1166,7 @@ async def well_known():
             "voices": {"method": "GET", "path": "/v1/voices"},
             "openapi": {"method": "GET", "path": "/openapi.json"},
         },
-        "mcp": {"stdio": "charavoice-mcp", "streamable_http": "/mcp", "tools": ["list_voices", "speak", "synthesize", "stop"]},
+        "mcp": {"stdio": "charavoice-mcp", "streamable_http": "/mcp", "tools": ["list_voices", "speak", "synthesize", "stop", "listen"]},
         "naturalness": {"field": "naturalness", "values": ["on", "off", "{pauses, breaths, dynamics, loudness, room}"]},
         "voice_tweak": {"fields": ["pitch", "formant", "brightness", "breath", "preset"], "info": "/v1/voicefx"},
         "agent_binding": {"header": "X-CharaVoice-Agent", "body_field": "agent", "mcp": "client name from initialize, or CHARAVOICE_AGENT",
@@ -1343,11 +1349,12 @@ async def simple_consent():
 
 class FolderBody(BaseModel):
     name: str
+    language: str | None = Field(default=None, description="ja / zh / en；省略则按第一段素材自动识别")
 
 
 @app.post("/v1/simple/folders", dependencies=[Depends(auth)])
 async def simple_create_folder(body: FolderBody):
-    return simple.create_folder(body.name)
+    return simple.create_folder(body.name, body.language)
 
 
 @app.get("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
@@ -1361,6 +1368,7 @@ class FolderPatch(BaseModel):
     read_speed: float | None = Field(default=None, ge=0.6, le=1.3, description="朗读语速")
     deess: str | None = Field(default=None, description="去齿音强度：off / light / medium / strong")
     mode: str | None = Field(default=None, description="合成方式：trained（训练版）/ omnivoice（音质优先）")
+    language: str | None = Field(default=None, description="素材语言：ja / zh / en（改了要重新学习）")
 
 
 @app.patch("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
@@ -1372,6 +1380,8 @@ async def simple_patch_folder(vid: str, body: FolderPatch):
         simple.set_deess(vid, body.deess)
     if body.mode is not None:
         await asyncio.to_thread(simple.set_mode, vid, body.mode)
+    if body.language is not None:
+        simple.set_language(vid, body.language)
     v = voices.update(vid, {"name": body.name}) if body.name else voices.get(vid)
     return simple.summary(v)
 
@@ -1596,7 +1606,7 @@ async def simple_mcp_voices(request: Request, agent: str = ""):
     for v in _folder_voices():
         s = simple.summary(v)
         job = s["job"] if s["job"] and s["job"]["state"] == "running" else None
-        out.append({"voice": v["id"], "name": v["name"], "language": simple.LANG,
+        out.append({"voice": v["id"], "name": v["name"], "language": simple.lang_of(v["id"]),
                     "status": "training" if job else "ready" if s["ready"] else "not trained",
                     "default": v["id"] == default, "yours": v["id"] == bound})
     return {"voices": out, "default": default}
@@ -1607,6 +1617,7 @@ class SynthBody(BaseModel):
     voice: str | None = None
     format: str = "wav"
     agent: str | None = None
+    language: str | None = None
 
 
 @app.post("/v1/simple/synthesize", dependencies=[Depends(auth)])
@@ -1614,11 +1625,15 @@ async def simple_synthesize(body: SynthBody, request: Request):
     """Text to an audio file in data/exports (MCP synthesize tool)."""
     bound_voice, _ = _bound(request, body.agent, "mcp")
     vid = _pick_voice(body.voice) or bound_voice or voices.find(None)["id"]
+    v = voices.get(vid)
+    lang = body.language if body.language in ("ja", "zh", "en") else None
+    spoken = lang or (simple.text_lang(body.text, simple.lang_of(vid)) if simple.is_folder(v) else None)
     try:
-        r = await simple.export(vid, body.text, body.format)
+        r = await simple.export(vid, body.text, body.format, None, lang)
     except RuntimeError as e:
         raise ApiError(502, str(e), "synthesis_failed")
-    return {**r, "voice": vid}
+    warn = simple.accent_warning(simple.lang_of(vid), spoken) if simple.is_folder(v) and spoken else None
+    return {**r, "voice": vid, "language": spoken, "accent_warning": warn}
 
 
 @app.post("/v1/simple/mcp/test", dependencies=[Depends(auth)])
@@ -1671,17 +1686,67 @@ async def service_stop():
     return {"stopping": True}
 
 
+# ---------------------------------------------------------------- push to talk: speech -> text -> cloned voice
+from . import ptt  # noqa: E402
+
+
+@app.post("/v1/ptt/start", dependencies=[Depends(auth)])
+async def ptt_start():
+    return ptt.start()
+
+
+class PttStop(BaseModel):
+    speak: bool | None = Field(default=None, description="识别后用声音念出来；省略按设置（默认念）")
+    voice: str | None = Field(default=None, description="念的声音；省略按设置，再省略用默认声音")
+
+
+@app.post("/v1/ptt/stop", dependencies=[Depends(auth)])
+async def ptt_stop(body: PttStop | None = None):
+    """Stop the take, recognise it and (by default) read it aloud. latency_ms counts from the
+    release of the key to the first audio of the reply."""
+    body = body or PttStop()
+    t0 = time.monotonic()
+    try:
+        r = await asyncio.to_thread(ptt.stop)
+    except RuntimeError as e:
+        raise ApiError(500, str(e), "listen_failed")
+    s = config.load_settings().get("ptt", {})
+    speak_it = s.get("auto_speak", True) if body.speak is None else body.speak
+    if not speak_it or not r["text"]:
+        return {**r, "spoken": False}
+    vid = _pick_voice(body.voice or s.get("voice")) or voices.find(None)["id"]
+    job = speech.start(r["text"], vid, None, play=True)
+    started = await asyncio.to_thread(_wait_any, job.utterance, 120.0) if job.utterance else False
+    warn = None
+    if job.voice.get("folder"):
+        warn = simple.accent_warning(simple.lang_of(job.voice["id"]), job.request.text_lang)
+    bus.publish("ptt", state="speaking", voice=vid, accent_warning=warn)
+    return {**r, "spoken": True, "voice": vid, "spoken_language": job.request.text_lang, "accent_warning": warn,
+            "latency_ms": int((time.monotonic() - t0) * 1000) if started else None}
+
+
+class PttSim(BaseModel):
+    path: str
+
+
+@app.post("/v1/ptt/simulate", dependencies=[Depends(auth)])
+async def ptt_simulate(body: PttSim):
+    """Test without a microphone: the content of a local audio file stands in for what was said."""
+    return await asyncio.to_thread(ptt.simulate, body.path)
+
+
 class ExportBody(BaseModel):
     text: str
     format: str = "wav"
     speed: float | None = Field(default=None, ge=0.6, le=1.3)
+    language: str | None = None
 
 
 @app.post("/v1/simple/folders/{vid}/export", dependencies=[Depends(auth)])
 async def simple_export(vid: str, body: ExportBody):
     _folder_or_404(vid)
     try:
-        return await simple.export(vid, body.text, body.format, body.speed)
+        return await simple.export(vid, body.text, body.format, body.speed, body.language if body.language in ("ja", "zh", "en") else None)
     except RuntimeError as e:
         raise ApiError(502, str(e), "synthesis_failed")
 

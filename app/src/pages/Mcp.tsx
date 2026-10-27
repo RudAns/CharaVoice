@@ -9,6 +9,7 @@ import { notify } from "../store";
 interface McpVoice {
   voice: string;
   name: string;
+  language: string;
   status: "ready" | "training" | "not trained";
   default: boolean;
 }
@@ -106,7 +107,7 @@ export function Mcp() {
     <div class="page doc mcp">
       <h2>接入 Agent</h2>
       <p class="lead">
-        训练好的声音可以通过 MCP 给任何 Agent 使用：Agent 调用 <code>speak</code> 就会用这个声音在本机念出日语。软件没开也没关系，Agent 第一次调用时会在后台自动启动 CharaVoice；软件开着时共用同一个后台，不会重复加载模型。
+        训练好的声音可以通过 MCP 给任何 Agent 使用：Agent 调用 <code>speak</code> 就会用这个声音在本机念出来（每个声音按自己素材的语言最自然，其他语言可能带口音）；<code>listen</code> 让 Agent 听你说一句话。软件没开也没关系，Agent 第一次调用时会在后台自动启动 CharaVoice；软件开着时共用同一个后台，不会重复加载模型。
       </p>
 
       <div class="card kv">
@@ -120,7 +121,7 @@ export function Mcp() {
         </div>
         <div>
           <span>工具</span>
-          <code>list_voices</code> <code>speak</code> <code>synthesize</code> <code>stop</code>
+          <code>list_voices</code> <code>speak</code> <code>synthesize</code> <code>stop</code> <code>listen</code>
         </div>
       </div>
 
@@ -136,6 +137,7 @@ export function Mcp() {
               <tr>
                 <th>声音</th>
                 <th>MCP 里的名字（voice 参数）</th>
+                <th>语言</th>
                 <th>状态</th>
                 <th>默认</th>
               </tr>
@@ -149,6 +151,7 @@ export function Mcp() {
                   <td>
                     <code>{v.voice}</code>
                   </td>
+                  <td>{({ ja: "日语", zh: "中文", en: "英语" } as Record<string, string>)[v.language] ?? v.language}</td>
                   <td class={v.status === "ready" ? "" : "muted"}>{STATUS[v.status]}</td>
                   <td>
                     <label class="check slim">

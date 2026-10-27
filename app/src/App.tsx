@@ -13,7 +13,7 @@ import { Simple } from "./pages/Simple";
 import { Stage } from "./pages/Stage";
 import { Voices } from "./pages/Voices";
 import { api } from "./api";
-import { go, missingAssets, page, pendingRec, refreshVoices, showAdvanced, toast } from "./store";
+import { go, missingAssets, notify, page, pendingRec, refreshVoices, showAdvanced, toast } from "./store";
 
 // The three things the app is for: the material library, training, and connecting agents (MCP)
 const MAIN_NAV = [
@@ -43,8 +43,14 @@ export default function App() {
   useEffect(() => {
     connect();
     const un = listen<boolean>("companion", (e) => setCompanion(e.payload));
+    // push to talk: pressed -> microphone on, released -> recognise and read back (backend decides the voice)
+    const unPtt = listen<boolean>("ptt-hotkey", (e) => {
+      if (e.payload) api("/v1/ptt/start", { method: "POST" }).catch((er) => notify(er.message, "error"));
+      else api("/v1/ptt/stop", { method: "POST", json: {} }).catch((er) => notify(er.message, "error"));
+    });
     return () => {
       un.then((f) => f());
+      unPtt.then((f) => f());
     };
   }, []);
   useEffect(() => {

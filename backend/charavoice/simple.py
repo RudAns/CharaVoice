@@ -1,4 +1,4 @@
-"""Simple mode: material folders for cloning one person's Japanese voice.
+"""Simple mode: material folders for cloning one person's voice (Japanese, Chinese or English).
 
 A material folder is a voice (language ja, flagged "folder": true). Saved clips live in
 data/voices/<id>/clips/<cid>.wav with metadata in clips.json; the recordings they were cut
@@ -32,7 +32,51 @@ from .events import bus
 from .recorder import recorder
 
 log = logging.getLogger("charavoice.simple")
-LANG = "ja"
+LANG = "ja"  # default for folders created before languages were per folder
+LANGS = ("ja", "zh", "en")
+WARM_TEXT = {"ja": "こんにちは。", "zh": "你好。", "en": "Hello."}
+
+
+def lang_of(vid: str) -> str:
+    """The language of a folder's material (what its sentences are transcribed and trained in)."""
+    try:
+        lang = voices.get(vid).get("language")
+    except KeyError:
+        return LANG
+    return lang if lang in LANGS else LANG
+
+
+# characters that only exist in simplified Chinese (Japanese uses the traditional or its own form)
+_SIMPLIFIED = re.compile(r"[们这说时个们为对还进这么样么吗呢吧见话语让谁给们边过还经点门问间东车长开关电见现]")
+_ZH_PUNCT = re.compile(r"[，；：“”？！]")
+
+
+def text_lang(text: str, folder_lang: str) -> str:
+    """Language to synthesize `text` in (when the caller did not say).
+    - kana -> Japanese (normal Japanese sentences nearly always contain kana)
+    - CJK without kana -> Chinese, except a short word of 1-4 characters with no Chinese-only
+      character forms or Chinese punctuation, which follows the folder (a Japanese name or noun)
+    - Latin only -> English
+    Chinese and Japanese keep embedded English words (GPT-SoVITS zh / ja read zh+en and ja+en)."""
+    if re.search(r"[぀-ヿ]", text):
+        return "ja"
+    han = re.findall(r"[㐀-鿿]", text)
+    if han:
+        short = len(han) <= 4 and not _SIMPLIFIED.search(text) and not _ZH_PUNCT.search(text)
+        return "ja" if folder_lang == "ja" and short else "zh"
+    if re.search(r"[A-Za-z]", text):
+        return "en"
+    return folder_lang
+
+
+ACCENT_NOTE = {"ja": "日语", "zh": "中文", "en": "英语"}
+
+
+def accent_warning(folder_lang: str, spoken: str) -> str | None:
+    if spoken == folder_lang:
+        return None
+    return (f"这个声音是用{ACCENT_NOTE.get(folder_lang, folder_lang)}素材训练的，说{ACCENT_NOTE.get(spoken, spoken)}可能带外语口音；"
+            f"想要自然的{ACCENT_NOTE.get(spoken, spoken)}，请用这个人说{ACCENT_NOTE.get(spoken, spoken)}的素材。")
 REC_VOICE = "__simple__"  # Recording.voice for hotkey recordings (not a real voice)
 SAME_SPEAKER = 0.5  # CAM++ cosine: same person usually 0.6-0.85, different people below 0.4
 CLIP_GAP = 0.3  # seconds of silence between kept ranges inside one saved clip
@@ -137,7 +181,8 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "trained": bool((v.get("weights") or {}).get("sovits")),
         "cloned": cloned,
         "dirty": bool(cloned) and (cloned.get("fingerprint") != _fingerprint(data["clips"])
-                                   or data.get("texts_edited", "") > cloned.get("at", "")),
+                                   or data.get("texts_edited", "") > cloned.get("at", "")
+                                   or data.get("lang_changed", "") > cloned.get("at", "")),
         "texts_edited": bool(cloned) and data.get("texts_edited", "") > cloned.get("at", ""),
         "job": j.public() if j else None,
         "path": str(clip_dir(vid).resolve()),
@@ -145,6 +190,8 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "read_speed": data.get("read_speed", READ_SPEED),
         "deess": data.get("deess", DEESS_DEFAULT),
         "mode": data.get("mode", "trained"),
+        "language": v.get("language") if v.get("language") in LANGS else LANG,
+        "lang_auto": bool(data.get("lang_auto")),
         "models": [{k: m[k] for k in ("id", "label", "note")} for m in data.get("models", [])],
         "model": data.get("model"),
         "doubtful": _doubtful_count(vid),
@@ -156,22 +203,65 @@ def _doubtful_count(vid: str) -> int:
         items = dataset.load(vid)["items"]
     except KeyError:
         return 0
+    lang = lang_of(vid)
+    def alt(i):
+        return i.get("asr_alt") if i.get("asr_alt_lang") == lang else (i.get("asr_ja") if lang == "ja" else None)
     return sum(1 for i in items if not i.get("deleted") and i.get("text", "") == i.get("asr_text", "")
-               and "asr_ja" in i and _doubt(i.get("text", ""), i["duration"], i["asr_ja"] or None))
+               and alt(i) is not None and _doubt(i.get("text", ""), i["duration"], alt(i) or None, lang))
 
 
 def folders() -> list[dict[str, Any]]:
     return [summary(v) for v in voices.list_all() if is_folder(v)]
 
 
-def create_folder(name: str) -> dict[str, Any]:
+def create_folder(name: str, language: str | None = None) -> dict[str, Any]:
+    """language: ja / zh / en, or None to detect it from the first clip saved into the folder."""
     if not consent():
         raise ValueError("请先确认只录制、克隆本人或已获授权的声音。")
-    v = voices.create(name, "authorized", LANG)
+    v = voices.create(name, "authorized", language if language in LANGS else LANG)
     v = voices.update(v["id"], {"folder": True})
     clip_dir(v["id"]).mkdir(parents=True, exist_ok=True)
-    _save_clips(v["id"], {"clips": [], "cloned": None})
-    return summary(v)
+    _save_clips(v["id"], {"clips": [], "cloned": None, "lang_auto": language not in LANGS})
+    return summary(voices.get(v["id"]))
+
+
+def set_language(vid: str, language: str) -> str:
+    if language not in LANGS:
+        raise ValueError("语言只能是 ja / zh / en")
+    voices.update(vid, {"language": language})
+    with _lock:
+        data = load_clips(vid)
+        data["lang_auto"] = False
+        data["lang_changed"] = voices.now_iso()  # the sentences must be transcribed again
+        _save_clips(vid, data)
+    return language
+
+
+def _detect_language(vid: str, wav: Path) -> None:
+    """First clip of a folder created without a language: let SenseVoice tell (ja / zh / en)."""
+    data = load_clips(vid)
+    if not data.get("lang_auto"):
+        return
+    try:
+        x = audio_util.decode(wav, 16000)[: 16000 * 30]
+        segs = asr.segment(x, min_silence=0.3, min_speech=0.5, max_speech=12.0)[:6]
+        votes: dict[str, float] = {}
+        for _, seg in segs:
+            r = asr.transcribe(seg)
+            if r["language"] in LANGS:
+                votes[r["language"]] = votes.get(r["language"], 0) + len(seg)
+    except Exception as e:
+        log.info("language detection failed: %s", e)
+        return
+    if not votes:
+        return
+    lang = max(votes, key=votes.get)
+    voices.update(vid, {"language": lang})
+    with _lock:
+        data = load_clips(vid)
+        data["lang_auto"] = False
+        _save_clips(vid, data)
+    log.info("folder %s: detected language %s", vid, lang)
 
 
 def set_read_speed(vid: str, speed: float) -> float:
@@ -215,7 +305,7 @@ def _pick_omni_ref(vid: str) -> dict[str, Any]:
     items = [i for i in dataset.load(vid)["items"] if not i.get("deleted") and i.get("text") and 2.5 <= i["duration"] <= 8.0]
     if not items:
         raise ValueError("文件夹还没有整理好的句子，请先点“克隆这个声线”。")
-    sure = [i for i in items if not _doubt(i["text"], i["duration"], i.get("asr_ja") or None)] or items
+    sure = [i for i in items if not _doubt(i["text"], i["duration"], i.get("asr_alt") or i.get("asr_ja") or None, lang_of(vid))] or items
     sure.sort(key=lambda i: (i["quality"].get("bgm_db", 0), -i["score"]))
     picked, total = [], 0.0
     for i in sure:
@@ -235,7 +325,8 @@ def _pick_omni_ref(vid: str) -> dict[str, Any]:
     out = voices.folder(vid) / "ref" / "omni.wav"
     out.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out), y, sr, subtype="PCM_16")
-    ref = {"audio": "ref/omni.wav", "text": "".join(i["text"] for i in picked), "lang": LANG,
+    joiner = " " if lang_of(vid) == "en" else ""
+    ref = {"audio": "ref/omni.wav", "text": joiner.join(i["text"] for i in picked), "lang": lang_of(vid),
            "duration": round(len(y) / sr, 2), "items": [i["id"] for i in picked]}
     with _lock:
         data = load_clips(vid)
@@ -535,6 +626,8 @@ def save_clip(vid: str, rid: str, ranges: list[list[float]], name: str | None = 
                 clip["name"] = f"片段 {len(data['clips']) + 1}"
             data["clips"].append(clip)
         _save_clips(vid, data)
+    if data.get("lang_auto"):
+        _detect_language(vid, d / f"{cid}.wav")
     return {k: clip[k] for k in clip if k != "embedding"}
 
 
@@ -670,14 +763,15 @@ def _clone(job: CloneJob) -> None:
         data = load_clips(vid)
         fingerprint = _fingerprint(data["clips"])
         prev = data.get("cloned") or {}
-        reuse = prev.get("fingerprint") == fingerprint and bool(dataset.load(vid)["items"])
+        reuse = (prev.get("fingerprint") == fingerprint and bool(dataset.load(vid)["items"])
+                 and data.get("lang_changed", "") <= prev.get("at", ""))
         if reuse:
             # same clips as last time: keep the processed sentences, the user's text corrections,
             # their include/exclude choices and the reference; only (re)train
             job.update(stage="沿用已整理的句子和修改过的转写", progress=0.4)
         else:
             _material(job, vid, data)
-            # 2. Japanese only; keep the folder's main speaker
+            # 2. the folder's language; keep the folder's main speaker
             job.update(stage="筛选说话人", progress=0.41)
             _keep_main_speaker(vid)
             job.update(stage="复核转写", progress=0.42)
@@ -690,7 +784,7 @@ def _clone(job: CloneJob) -> None:
         v = voices.get(vid)
         ref = v.get("ref") if reuse and v.get("ref") else _pick_ref(vid)
         if not ref:
-            raise RuntimeError("没有识别出可用的日语语句。请确认片段里是清晰的人声。")
+            raise RuntimeError("没有识别出可用的语句。请确认片段里是清晰的人声，文件夹的语言也设对了。")
         secs = dataset.summary(vid)["seconds"]
         job.seconds = secs
         _after_material(job, vid, fingerprint, secs)
@@ -709,7 +803,7 @@ def _material(job: CloneJob, vid: str, data: dict[str, Any]) -> None:
     for c in data["clips"]:
         src = dataset.add_source(vid, c["name"] or c["id"], raw=(clip_dir(vid) / c["file"]).read_bytes())
         todo.append((src["id"], src["name"], [(0.0, src["duration"])]))
-    djob = dataset.Job(voice=vid, language=LANG)
+    djob = dataset.Job(voice=vid, language=lang_of(vid))
     dataset.jobs[vid] = djob
     t = threading.Thread(target=dataset._run, args=(djob, todo, job.separate), daemon=True)
     t.start()
@@ -774,12 +868,13 @@ def _mark_cloned(vid: str, fingerprint: str, mode: str, seconds: float) -> None:
 
 
 def _keep_main_speaker(vid: str) -> None:
-    """Force the language to Japanese, then drop sentences that sound like someone else:
+    """Force the folder's language, then drop sentences that sound like someone else:
     the target is the centroid of the half of sentences closest to the folder as a whole."""
+    lang = lang_of(vid)
     with dataset._lock:
         d = dataset.load(vid)
         for i in d["items"]:
-            i["lang"] = LANG
+            i["lang"] = lang
         dataset.save(vid, d)
     items = [i for i in d["items"] if i.get("text") and i.get("embedding")]
     if len(items) < 2:
@@ -799,13 +894,14 @@ def _pick_ref(vid: str) -> dict[str, Any] | None:
     items = [i for i in dataset.load(vid)["items"] if not i.get("deleted") and i.get("text")]
     if not items:
         return None
-    sure = [i for i in items if not _doubt(i["text"], i["duration"], i.get("asr_ja") or None)] or items
+    lang = lang_of(vid)
+    sure = [i for i in items if not _doubt(i["text"], i["duration"], i.get("asr_alt") or i.get("asr_ja") or None, lang)] or items
     good = [i for i in sure if 3.0 <= i["duration"] <= 10.0] or sure
     best = max(good, key=lambda i: (i["score"], i.get("similarity") or 0))
     ref_dir = voices.folder(vid) / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(dataset.ddir(vid) / "clips" / f"{best['id']}.wav", ref_dir / "ref.wav")
-    voices.set_ref(vid, "ref/ref.wav", best["text"], LANG, best["duration"])
+    voices.set_ref(vid, "ref/ref.wav", best["text"], lang_of(vid), best["duration"])
     _tag_ref(vid, best["id"])
     return best
 
@@ -825,44 +921,67 @@ def _similar(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, _PUNCT.sub("", a), _PUNCT.sub("", b)).ratio()
 
 
-def _doubt(text: str, duration: float, alt: str | None = None) -> str | None:
+def _doubt(text: str, duration: float, alt: str | None = None, lang: str = LANG) -> str | None:
     """Why a transcript may be wrong, or None. SenseVoice reports no confidence, so the signal is
-    a second reading of the same audio with the language forced to Japanese (`alt`): where the
-    two readings disagree the recogniser was unsure. Plus plausibility checks."""
+    a second reading of the same audio with the language forced to the folder's (`alt`): where the
+    two readings disagree the recogniser was unsure. Plus plausibility checks per language."""
     t = (text or "").strip()
     if not t:
         return "没有识别出文字"
-    if alt is not None and _similar(t, alt) < 0.9:
+    if alt is not None and _similar(t.lower(), alt.lower()) < 0.9:
         return "两次识别结果不一致"
-    if len(t) >= 2 and not _KANA.search(t):
-        return "没有假名，可能识别成了中文"
-    if re.search(r"[？?！!](?=[\u3040-\u309f])", t):
-        return "句中有多余的标点"
-    if _LATIN.search(t):
-        return "含有字母，可能识别成了别的语言"
-    jp = len(_KANA_KANJI.findall(t))
-    if jp < len(t.replace(" ", "")) * 0.6:
-        return "日语字符偏少"
-    rate = jp / max(duration, 0.1)
-    if rate < 2.5:
-        return "文字比声音短很多，可能漏字"
-    if rate > 11:
-        return "文字比声音长很多，可能多字"
     if re.search(r"(.)\1{3,}", t):
         return "同一个字连续重复"
+    if lang == "ja":
+        if len(t) >= 2 and not _KANA.search(t):
+            return "没有假名，可能识别成了中文"
+        if re.search(r"[？?！!](?=[\u3040-\u309f])", t):
+            return "句中有多余的标点"
+        if _LATIN.search(t):
+            return "含有字母，可能识别成了别的语言"
+        n = len(_KANA_KANJI.findall(t))
+        if n < len(t.replace(" ", "")) * 0.6:
+            return "日语字符偏少"
+        lo, hi = 2.5, 11
+    elif lang == "zh":
+        if _KANA.search(t):
+            return "含有假名，可能识别成了日语"
+        han = len(re.findall(r"[\u3400-\u9fff]", t))
+        if han < len(re.sub(r"[\s\W]", "", t)) * 0.5:
+            return "汉字偏少，可能识别成了别的语言"
+        if re.search(r"[？?！!](?=[\u3400-\u9fff])", t):
+            return "句中有多余的标点"
+        n, lo, hi = han, 1.5, 9
+    else:  # en
+        if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", t):
+            return "含有中日文字，可能识别成了别的语言"
+        n, lo, hi = len(re.findall(r"[A-Za-z']+", t)), 0.8, 5.5
+    rate = n / max(duration, 0.1)
+    if rate < lo:
+        return "文字比声音短很多，可能漏字"
+    if rate > hi:
+        return "文字比声音长很多，可能多字"
     return None
 
 
 def _second_opinion(vid: str) -> dict[str, str]:
-    """Japanese-forced transcript of every sentence (computed once, kept in items.json as asr_ja)."""
+    """Transcript of every sentence with the language forced to the folder's (computed once, kept
+    in items.json as asr_alt with the language it was made for)."""
+    lang = lang_of(vid)
+
+    def alt(i):  # sentences checked before languages were per folder carry asr_ja
+        if i.get("asr_alt_lang") == lang:
+            return i.get("asr_alt")
+        return i.get("asr_ja") if lang == "ja" and "asr_ja" in i else None
+
     with dataset._lock:
         d = dataset.load(vid)
-        todo = [i for i in d["items"] if "asr_ja" not in i]
+        todo = [i for i in d["items"] if alt(i) is None]
     got = {}
     for i in todo:
         try:
             x = audio_util.decode(dataset.ddir(vid) / "clips" / f"{i['id']}.wav", 16000)
-            got[i["id"]] = asr.transcribe(x, LANG)["text"]
+            got[i["id"]] = asr.transcribe(x, lang)["text"]
         except Exception as e:  # missing clip or ASR model: no second opinion for this one
             log.info("second transcript failed for %s: %s", i["id"], e)
     if got:
@@ -870,9 +989,9 @@ def _second_opinion(vid: str) -> dict[str, str]:
             d = dataset.load(vid)
             for i in d["items"]:
                 if i["id"] in got:
-                    i["asr_ja"] = got[i["id"]]
+                    i["asr_alt"], i["asr_alt_lang"] = got[i["id"]], lang
             dataset.save(vid, d)
-    return {i["id"]: i.get("asr_ja", "") for i in dataset.load(vid)["items"]}
+    return {i["id"]: alt(i) or "" for i in dataset.load(vid)["items"]}
 
 
 def transcripts(vid: str) -> dict[str, Any]:
@@ -883,6 +1002,7 @@ def transcripts(vid: str) -> dict[str, Any]:
             _tag_ref(vid, same[0]["id"])
             v = voices.get(vid)
     alt = _second_opinion(vid)
+    lang = lang_of(vid)
     items = []
     for i in dataset.load(vid)["items"]:
         a = alt.get(i["id"]) or None
@@ -892,11 +1012,11 @@ def transcripts(vid: str) -> dict[str, Any]:
                       "edited": text != i.get("asr_text", ""),
                       "suggest": a if a and _PUNCT.sub("", a) != _PUNCT.sub("", text) else None,
                       # once the user has edited a sentence it is theirs: no more warnings
-                      "doubt": None if i.get("deleted") or text != i.get("asr_text", "") else _doubt(text, i["duration"], a)})
+                      "doubt": None if i.get("deleted") or text != i.get("asr_text", "") else _doubt(text, i["duration"], a, lang)})
     ref = v.get("ref")
     ref_item = next((i for i in items if ref and i["id"] == ref.get("item")), None)
     return {
-        "ref": {**ref, "doubt": ref_item["doubt"] if ref_item else _doubt(ref["text"], ref["duration"]),
+        "ref": {**ref, "doubt": ref_item["doubt"] if ref_item else _doubt(ref["text"], ref["duration"], None, lang),
                 "suggest": ref_item["suggest"] if ref_item else None} if ref else None,
         "items": items,
         "doubtful": sum(1 for i in items if i["doubt"]),
@@ -920,7 +1040,7 @@ def edit_transcript(vid: str, item_id: str, text: str | None = None, deleted: bo
     v = voices.get(vid)
     # the reference was copied from this sentence: keep its text in step
     if text is not None and v.get("ref") and v["ref"].get("item") == item_id:
-        voices.set_ref(vid, v["ref"]["audio"], item["text"], LANG, v["ref"]["duration"])
+        voices.set_ref(vid, v["ref"]["audio"], item["text"], lang_of(vid), v["ref"]["duration"])
         _tag_ref(vid, item_id)
     _mark_texts_edited(vid)
     return item
@@ -933,7 +1053,7 @@ def set_ref_text(vid: str, text: str) -> dict[str, Any]:
     if not text.strip():
         raise ValueError("参考文字不能为空。")
     item = v["ref"].get("item")
-    voices.set_ref(vid, v["ref"]["audio"], text, LANG, v["ref"]["duration"])
+    voices.set_ref(vid, v["ref"]["audio"], text, lang_of(vid), v["ref"]["duration"])
     if item:
         _tag_ref(vid, item)
         try:
@@ -953,7 +1073,7 @@ def use_as_ref(vid: str, item_id: str) -> dict[str, Any]:
     ref_dir = voices.folder(vid) / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(dataset.ddir(vid) / "clips" / f"{item_id}.wav", ref_dir / "ref.wav")
-    voices.set_ref(vid, "ref/ref.wav", it["text"], LANG, it["duration"])
+    voices.set_ref(vid, "ref/ref.wav", it["text"], lang_of(vid), it["duration"])
     _tag_ref(vid, item_id)
     return voices.get(vid)["ref"]
 
@@ -1137,7 +1257,7 @@ async def _render(vid: str, text: str, gpt: str, sovits: str) -> tuple[np.ndarra
     from .engine import engine
 
     v = voices.get(vid)
-    req = speech.build_request(v, text, LANG, 1.0, 0)
+    req = speech.build_request(v, text, text_lang(text, lang_of(vid)), 1.0, 0)
     req = replace(req, gpt_weights=str((voices.folder(vid) / gpt).resolve()),
                   sovits_weights=str((voices.folder(vid) / sovits).resolve()), seed=20261027)
     chunks, sr = [], 32000
@@ -1280,7 +1400,7 @@ def _retrain(job: "CloneJob") -> None:
 
 
 # ------------------------------------------------------------------ export a whole article
-_SENT = re.compile(r"(?<=[。！？!?\n])")
+_SENT = re.compile(r"(?<=[。！？!?\n])|(?<=[.;])\s+")
 
 
 def chunks(text: str, limit: int = 1200) -> list[str]:
@@ -1304,20 +1424,20 @@ async def warm(vid: str) -> None:
     from . import speech
 
     try:
-        job = speech.start("こんにちは。", vid, LANG, play=False, naturalness=False)
+        job = speech.start(WARM_TEXT[lang_of(vid)], vid, None, play=False, naturalness=False)
         await job.done.wait()
     except Exception as e:  # engine stopped or busy training: nothing to warm
         log.info("warm-up of %s skipped: %s", vid, e)
 
 
-async def export(vid: str, text: str, fmt: str = "wav", speed: float | None = None) -> dict[str, Any]:
+async def export(vid: str, text: str, fmt: str = "wav", speed: float | None = None, language: str | None = None) -> dict[str, Any]:
     from . import compliance, speech
 
     fmt = fmt if fmt in ("wav", "mp3") else "wav"
     v = voices.get(vid)
     parts, sr = [], 0
     for c in chunks(text):
-        job = speech.start(c, vid, LANG, play=False, speed=speed or read_speed(vid))
+        job = speech.start(c, vid, language, play=False, speed=speed or read_speed(vid))
         await job.done.wait()
         if job.error:
             raise RuntimeError(job.error)

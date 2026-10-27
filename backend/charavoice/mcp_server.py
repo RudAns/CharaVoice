@@ -1,6 +1,7 @@
-"""MCP server exposing CharaVoice to agents: list_voices, speak, synthesize, stop.
+"""MCP server exposing CharaVoice to agents: list_voices, speak, synthesize, stop, listen.
 
-The voices are the material-library folders the user trained in CharaVoice (Japanese). It is a thin
+The voices are the material-library folders the user trained in CharaVoice, each in the language
+of its material (Japanese, Chinese or English). It is a thin
 client of the CharaVoice backend; with stdio it starts that backend in the background when it is
 not running yet (see client.connect), and reuses it when the app is already open, so models are
 loaded once. Two transports: stdio (`charavoice-mcp`, or `charavoice-backend.exe mcp` in the
@@ -25,11 +26,13 @@ server = MCPServer(
     name="charavoice",
     title="CharaVoice",
     instructions=(
-        "CharaVoice speaks Japanese in character voices the user cloned on this computer. "
-        "list_voices() shows the voices; speak(text) says Japanese text aloud on the user's speakers "
-        "(in the voice the user assigned to you, or the default voice); synthesize(text) writes an audio "
-        "file instead and returns its path; stop() stops speech that is playing. "
-        "Keep spoken text short and conversational; do not read code or long lists aloud."
+        "CharaVoice speaks in character voices the user cloned on this computer. Each voice has the "
+        "language of its material (ja / zh / en, see list_voices); it sounds most natural in that language, "
+        "other languages work but may carry an accent. speak(text) says text aloud on the user's speakers "
+        "(in the voice the user assigned to you, or the default voice); synthesize(text) writes an audio file "
+        "instead and returns its path; stop() stops speech that is playing; listen() hears one utterance from "
+        "the user's microphone and returns the text. Keep spoken text short and conversational; do not read "
+        "code or long lists aloud."
     ),
 )
 
@@ -58,8 +61,9 @@ def _guard(fn):
 
 
 @server.tool(description="List the character voices the user trained in CharaVoice. Each entry: voice (the id to pass "
-                         "to speak / synthesize), name, status (ready = can speak), default (used when you pass no voice). "
-                         "The voices speak Japanese.")
+                         "to speak / synthesize), name, language (ja / zh / en: the language of its material, where it "
+                         "sounds most natural), status (ready = can speak), default (used when you pass no voice), "
+                         "yours (the voice the user assigned to you).")
 def list_voices(ctx: Context | None = None) -> list[dict]:
     agent = _agent(ctx)
 
@@ -70,37 +74,50 @@ def list_voices(ctx: Context | None = None) -> list[dict]:
     return _guard(run)
 
 
-@server.tool(description="Say Japanese text aloud on the user's speakers in a CharaVoice character voice. "
-                         "text: what to say (Japanese). voice: id or name from list_voices; leave empty to use the voice "
+@server.tool(description="Say text aloud on the user's speakers in a CharaVoice character voice. "
+                         "text: what to say. language: ja / zh / en, or empty to detect it from the text (kana = Japanese, "
+                         "Latin = English, Chinese characters = Chinese; Chinese and Japanese may contain English words). "
+                         "Best in the voice's own language (list_voices); the result says when it may sound accented. "
+                         "voice: id or name from list_voices; leave empty to use the voice "
                          "the user assigned to you in CharaVoice, otherwise the default voice. "
                          "wait: true blocks until playback finishes (default false: returns as soon as audio starts, "
                          "usually well under a second). A new speak call does not interrupt; call stop() first to cut "
                          "off speech that is still playing.")
-def speak(text: str, voice: str | None = None, wait: bool = False, ctx: Context | None = None) -> str:
+def speak(text: str, voice: str | None = None, language: str | None = None, wait: bool = False,
+          ctx: Context | None = None) -> str:
     agent = _agent(ctx)
 
     def run():
         with connect(timeout=900) as c:
-            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "wait": wait, "agent": agent, "via": "mcp"}).json()
+            r = call(c, "POST", "/v1/speak", json={"text": text, "voice": voice, "language": language or None, "wait": wait,
+                                                   "agent": agent, "via": "mcp"}).json()
         state = "finished playing" if r["finished"] else "playing"
         secs = f", {r['audio_seconds']}s of audio" if r.get("audio_seconds") else ""
         lat = f", audio started after {r['latency_ms']} ms" if r.get("latency_ms") is not None else ""
-        return f"Spoken with voice '{r['voice']}': {state}{secs}{lat}."
+        note = f" Note: the voice's material is in another language, so this may sound accented ({r['accent_warning']})" \
+            if r.get("accent_warning") else ""
+        return f"Spoken with voice '{r['voice']}' in {r['language']}: {state}{secs}{lat}.{note}"
 
     return _guard(run)
 
 
-@server.tool(description="Synthesize Japanese text to an audio file in a CharaVoice character voice instead of playing it. "
-                         "text: what to say (Japanese, articles are fine). voice: id or name from list_voices; empty = "
+@server.tool(description="Synthesize text to an audio file in a CharaVoice character voice instead of playing it. "
+                         "text: what to say (articles are fine). language: ja / zh / en, or empty to detect it from the text. "
+                         "voice: id or name from list_voices; empty = "
                          "your assigned voice or the default voice. format: wav (default) or mp3. Returns the absolute path "
                          "of the file on this computer and its length. The audio carries an AI-generated tag and watermark.")
-def synthesize(text: str, voice: str | None = None, format: str = "wav", ctx: Context | None = None) -> dict:
+def synthesize(text: str, voice: str | None = None, language: str | None = None, format: str = "wav",
+               ctx: Context | None = None) -> dict:
     agent = _agent(ctx)
 
     def run():
         with connect(timeout=1800) as c:
-            r = call(c, "POST", "/v1/simple/synthesize", json={"text": text, "voice": voice, "format": format, "agent": agent}).json()
-        return {"path": r["path"], "seconds": r["seconds"], "voice": r["voice"], "format": r["format"]}
+            r = call(c, "POST", "/v1/simple/synthesize", json={"text": text, "voice": voice, "format": format, "agent": agent,
+                                                               "language": language or None}).json()
+        out = {"path": r["path"], "seconds": r["seconds"], "voice": r["voice"], "language": r.get("language"), "format": r["format"]}
+        if r.get("accent_warning"):
+            out["note"] = r["accent_warning"]
+        return out
 
     return _guard(run)
 
@@ -111,6 +128,23 @@ def stop() -> str:
         with connect() as c:
             n = call(c, "POST", "/v1/audio/stop").json().get("stopped", 0)
         return f"Stopped {n} utterance(s)." if n else "Nothing was playing."
+
+    return _guard(run)
+
+
+@server.tool(description="Listen to the user's microphone for one utterance and return what they said as text. "
+                         "This turns the microphone on (the system default microphone, or the one chosen in CharaVoice "
+                         "settings) until the user has finished: the utterance ends after about 1.2 s of silence, or after "
+                         "max_seconds (default 30). If nobody starts speaking within timeout seconds (default 15) it returns "
+                         "timed_out=true with empty text. Waits for any speech that is still playing to finish first. "
+                         "Language is detected (zh / en / ja / ko / yue).")
+def listen(timeout: float = 15.0, max_seconds: float = 30.0) -> dict:
+    def run():
+        with connect(timeout=timeout + max_seconds + 90) as c:
+            r = call(c, "POST", "/v1/listen", json={"timeout": timeout, "max_seconds": max_seconds}).json()
+        if r.get("timeout"):
+            return {"text": "", "language": "", "timed_out": True}
+        return {"text": r["text"], "language": r["language"], "timed_out": False}
 
     return _guard(run)
 

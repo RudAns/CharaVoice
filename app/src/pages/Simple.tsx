@@ -40,6 +40,8 @@ interface Folder {
   read_speed?: number;
   doubtful?: number;
   deess?: "off" | "light" | "medium" | "strong";
+  language?: "ja" | "zh" | "en";
+  lang_auto?: boolean;
   mode?: "trained" | "omnivoice";
   models?: { id: string; label: string; note: string }[];
   model?: string | null;
@@ -55,6 +57,7 @@ interface Clip {
 }
 type Editing = { rec: string; replace?: { id: string; folder: string; ranges: [number, number][] } | null };
 
+export const LANG_NAME: Record<string, string> = { ja: "日语", zh: "中文", en: "英语" };
 const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const lsGet = (k: string) => {
   try {
@@ -210,10 +213,21 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
   }
   async function newFolder(): Promise<string | null> {
     if (!(await ensureConsent())) return null;
-    const name = await askName("新建素材文件夹", "", "新建", "人物或角色名");
+    const name = await askName("新建素材文件夹", "", "下一步", "人物或角色名");
     if (!name?.trim()) return null;
+    const lang = await askConfirm(
+      `“${name.trim()}”说什么语言？`,
+      <p class="muted">素材按这个语言转写和训练，克隆出的声音说这个语言最自然。不确定就选“自动识别”，用第一段保存的片段来判断，之后也可以改。</p>,
+      [
+        { label: "自动识别", value: "auto" },
+        { label: "日语", value: "ja" },
+        { label: "中文", value: "zh" },
+        { label: "英语", value: "en" },
+      ],
+    );
+    if (!lang) return null;
     try {
-      const f = await api<Folder>("/v1/simple/folders", { method: "POST", json: { name: name.trim() } });
+      const f = await api<Folder>("/v1/simple/folders", { method: "POST", json: { name: name.trim(), language: lang === "auto" ? null : lang } });
       setFolders((fs) => [...fs, f]);
       pick(f.id);
       return f.id;
@@ -221,6 +235,21 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
       notify(e.message, "error");
       return null;
     }
+  }
+  async function changeLanguage(f: Folder) {
+    const lang = await askConfirm(
+      `“${f.name}”的素材是什么语言？`,
+      <p class="muted">改了以后点“重新学习”，素材会按新语言重新转写和训练。</p>,
+      [
+        { label: "取消", value: "" },
+        { label: "日语", value: "ja" },
+        { label: "中文", value: "zh" },
+        { label: "英语", value: "en" },
+      ],
+    );
+    if (!lang || lang === f.language) return;
+    await api(`/v1/simple/folders/${f.id}`, { method: "PATCH", json: { language: lang } }).catch((e) => notify(e.message, "error"));
+    loadAll();
   }
   async function renameFolder(f: Folder) {
     const name = await askName("重命名文件夹", f.name, "保存");
@@ -412,7 +441,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
       <header class="sm-head">
         <h2>{view === "library" ? "素材库" : "训练"}</h2>
         <span class="muted">
-          {view === "library" ? "一个文件夹就是一个要克隆的人或角色：录制、截取、整理声音片段" : "用文件夹里的全部片段学习声线（日语），训练好的声音可以接入 Agent"}
+          {view === "library" ? "一个文件夹就是一个要克隆的人或角色：录制、截取、整理声音片段" : "用文件夹里的全部片段学习声线（日语、中文、英语按文件夹设置），训练好的声音可以接入 Agent"}
         </span>
       </header>
       <div class={`sm-grid ${view} ${editing ? "editing" : ""}`}>
@@ -435,6 +464,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
                 >
                   <div class="sf-top">
                     <span class="sf-name">{f.name}</span>
+                    <span class="sf-lang" title={f.lang_auto ? "第一段片段保存后自动识别" : "素材语言"}>{f.lang_auto ? "待识别" : LANG_NAME[f.language ?? "ja"]}</span>
                     <span class={`sf-state ${fj ? "run" : f.ready ? "trained" : ""}`}>
                       {fj ? `训练中 ${Math.round(fj.progress * 100)}%` : f.ready ? "已就绪" : "未训练"}
                     </span>
@@ -447,6 +477,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
                   {view === "library" && f.id === cur && (
                     <div class="sf-actions">
                       <button class="small" onClick={(e) => { e.stopPropagation(); renameFolder(f); }}>重命名</button>
+                      <button class="small" onClick={(e) => { e.stopPropagation(); changeLanguage(f); }}>语言</button>
                       <button class="small" onClick={(e) => { e.stopPropagation(); api(`/v1/simple/folders/${f.id}/open`, { method: "POST" }).catch((er) => notify(er.message, "error")); }}>打开</button>
                       <button class="small danger" onClick={(e) => { e.stopPropagation(); deleteFolder(f); }}>删除</button>
                     </div>
@@ -509,7 +540,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
             <div class="step-title">{editing ? "截取" : `片段${folder ? ` · ${folder.name}` : ""}`}</div>
             <div class="grow" />
             {!editing && folder?.cloned && (
-              <button class="small" onClick={() => setShowTr(true)} title="查看、修改切出的每句日语转写">
+              <button class="small" onClick={() => setShowTr(true)} title="查看、修改切出的每句转写">
                 转写{folder.doubtful ? <span class="sm-doubt-badge">{folder.doubtful} 句可能有误</span> : null}
               </button>
             )}
@@ -597,6 +628,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
               <span>素材 <strong>{mmss(folder.seconds)}</strong>（{folder.clips} 段）</span>
               {folder.cloned && <span>有效语音 <strong>{mmss(folder.cloned.seconds)}</strong></span>}
               {folder.cloned && <span>上次训练 <strong>{folder.cloned.at.slice(0, 16).replace("T", " ")}</strong></span>}
+              <span>语言 <strong>{folder.lang_auto ? "待识别" : LANG_NAME[folder.language ?? "ja"]}</strong></span>
               {folder.ready && <span>方式 <strong>{folder.trained ? "训练（v2ProPlus）" : "零样本"}</strong></span>}
             </div>
           )}
@@ -640,7 +672,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
                   {!folder.cloned ? "克隆这个声线" : folder.texts_edited ? "重新学习（转写已改）" : folder.dirty ? "重新学习（有新片段）" : "重新学习"}
                 </button>
                 {folder.cloned && view === "train" && (
-                  <button onClick={() => setShowTr(true)} title="查看、修改每句的日语转写和参考文字">
+                  <button onClick={() => setShowTr(true)} title="查看、修改每句的转写和参考文字">
                     转写{folder.doubtful ? <span class="sm-doubt-badge">{folder.doubtful} 句可能有误</span> : null}
                   </button>
                 )}
@@ -766,7 +798,7 @@ function AskModal({ ask, onDone }: { ask: Ask; onDone: (v: string | null) => voi
 // ------------------------------------------------------------------ 4 read aloud
 /** Split Japanese prose into sentences; very short ones join the next, very long ones split at 、. */
 export function sentences(text: string): string[] {
-  const raw = text.replace(/\r/g, "").split(/(?<=[。！？!?…\n])/).map((s) => s.trim()).filter(Boolean);
+  const raw = text.replace(/\r/g, "").split(/(?<=[。！？!?…\n；])|(?<=[.;])\s+/).map((s) => s.trim()).filter(Boolean);
   const out: string[] = [];
   let carry = "";
   for (const s of raw) {
@@ -793,7 +825,11 @@ export function sentences(text: string): string[] {
   return out;
 }
 
-const TRY_SAMPLE = "こんにちは。今日はいい天気ですね、少し散歩に行きませんか。";
+const TRY_SAMPLES: Record<string, string> = {
+  ja: "こんにちは。今日はいい天気ですね、少し散歩に行きませんか。",
+  zh: "你好，今天天气真不错，要不要一起出去走走？",
+  en: "Hello there. It's a lovely day today, would you like to go for a walk?",
+};
 const SAMPLE = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。";
 
 /** Read a streamed WAV response (header with unknown length, then 16-bit PCM) chunk by chunk. */
@@ -837,7 +873,9 @@ async function* pcmChunks(r: Response): AsyncGenerator<{ sr: number; pcm: Float3
 }
 
 function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy: boolean; mini?: boolean }) {
-  const [text, setText] = useState(() => lsGet(mini ? "cv.try.text" : "cv.simple.text") ?? (mini ? TRY_SAMPLE : SAMPLE));
+  const lang = folder?.language ?? "ja";
+  const [text, setText] = useState(() => (mini ? TRY_SAMPLES[lang] : lsGet("cv.simple.text") ?? SAMPLE));
+  const [heard, setHeard] = useState<{ language?: string; warn?: string | null } | null>(null);
   const [state, setState] = useState<"idle" | "playing" | "paused">("idle");
   const [idx, setIdx] = useState(-1);
   const [waiting, setWaiting] = useState(false);
@@ -856,6 +894,10 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
 
   useEffect(() => {
     setSpeed(folder?.read_speed ?? 0.9);
+    if (mini) setText(lsGet(`cv.try.${folder?.id}`) ?? TRY_SAMPLES[folder?.language ?? "ja"]);
+    setHeard(null);
+    // the push-to-talk hotkey reads back in the voice open on this page
+    if (mini && folder?.ready) api("/v1/settings", { method: "PATCH", json: { ptt: { voice: folder.id } } }).catch(() => {});
     setDeess(folder?.deess ?? "medium");
     setMode(folder?.mode ?? "trained");
     return () => stop();
@@ -928,7 +970,7 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
           method: "POST",
           signal: abort.signal,
           headers: { Authorization: `Bearer ${conn.value!.token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ input: list[i], voice: folder.id, language: "ja", play: false, stream: true, response_format: "wav", speed: speedRef.current }),
+          body: JSON.stringify({ input: list[i], voice: folder.id, play: false, stream: true, response_format: "wav", speed: speedRef.current }),
         });
         if (!res.ok) {
           let msg = `${res.status}`;
@@ -1013,19 +1055,20 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
         {!mini && <div class="step-no">4</div>}
         <div class="step-title">{mini ? "试听" : "朗读"}</div>
         <div class="grow" />
-        <span class="muted">日语 · {list.length} 句</span>
+        <span class="muted">{LANG_NAME[lang]}声音 · {list.length} 句</span>
       </div>
       {mini && state === "idle" ? (
         <input
           class="sm-try"
-          lang="ja"
+          lang={lang}
           value={text}
-          placeholder="输入一句日语，听听效果"
+          placeholder="输入一句话，或按住麦克风说一句"
           onInput={(e) => {
             const v = (e.target as HTMLInputElement).value;
             setText(v);
+            setHeard(null);
             try {
-              localStorage.setItem("cv.try.text", v);
+              localStorage.setItem(`cv.try.${folder?.id}`, v);
             } catch {}
           }}
           onKeyDown={(e) => e.key === "Enter" && ready && !busy && start()}
@@ -1033,9 +1076,9 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
       ) : state === "idle" ? (
         <textarea
           class="sm-text"
-          lang="ja"
+          lang={lang}
           value={text}
-          placeholder="粘贴一段日语文章…"
+          placeholder="粘贴一段文章…"
           onInput={(e) => {
             const v = (e.target as HTMLTextAreaElement).value;
             setText(v);
@@ -1045,7 +1088,7 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
           }}
         />
       ) : (
-        <div class="sm-reading" lang="ja">
+        <div class="sm-reading" lang={lang}>
           {list.map((s, i) => (
             <span class={i === idx ? "now" : i < idx ? "done" : ""}>{s}</span>
           ))}
@@ -1090,6 +1133,7 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
         </div>
       </details>
       {!ready && folder && <p class="muted">{mini ? "训练完成后就能在这里试听。" : "先完成第 3 步克隆，才能用这个声线朗读。"}</p>}
+      {mini && heard?.warn && <p class="sm-warn">{heard.warn}</p>}
       {ready && mode === "trained" && eng?.state !== "ready" && (
         <p class="muted">
           语音引擎{eng?.state === "starting" ? "正在启动…" : "未启动。"}
@@ -1098,7 +1142,10 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
       )}
       <div class="btn-row">
         {state === "idle" ? (
-          <button class="primary" disabled={!ready || busy || !list.length} onClick={start}>▶ {mini ? "试听" : "朗读"}</button>
+          <>
+            <button class="primary" disabled={!ready || busy || !list.length} onClick={start}>▶ {mini ? "试听" : "朗读"}</button>
+            {mini && <MicButton folder={folder} disabled={!ready || busy} onText={(t, l, w) => { setText(t); setHeard({ language: l, warn: w }); }} />}
+          </>
         ) : (
           <>
             <button class="primary" onClick={pause}>{state === "playing" ? "❚❚ 暂停" : "▶ 继续"}</button>
@@ -1113,5 +1160,78 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
         </>}
       </div>
     </section>
+  );
+}
+
+
+/** Hold to talk: speech -> text (SenseVoice, language detected) -> read back in this voice. */
+function MicButton({ folder, disabled, onText }: { folder: Folder | null; disabled: boolean; onText: (text: string, lang: string, warn: string | null) => void }) {
+  const [state, setState] = useState<"idle" | "recording" | "working">("idle");
+  const [auto, setAuto] = useState(true);
+  const [key, setKey] = useState("");
+  useEffect(() => {
+    invoke<string>("ptt_hotkey").then(setKey, () => {});
+    api("/v1/settings").then((s: any) => setAuto(s.ptt?.auto_speak !== false)).catch(() => {});
+    // the global hotkey goes through the backend too: show what it heard here
+    return onEvent((ev) => {
+      if (ev.type !== "ptt") return;
+      if (ev.state === "recording") setState("recording");
+      else if (ev.state === "recognizing") setState("working");
+      else if (ev.state === "text") onText(ev.text, ev.language, null);
+      else if (ev.state === "speaking") {
+        setState("idle");
+        if (ev.accent_warning) notify(ev.accent_warning);
+      } else if (ev.state === "empty" || ev.state === "error") {
+        setState("idle");
+        notify(ev.state === "empty" ? "没听到说话" : ev.message, ev.state === "error" ? "error" : "info");
+      }
+    });
+  }, []);
+  async function down() {
+    if (disabled || state !== "idle") return;
+    setState("recording");
+    await api("/v1/ptt/start", { method: "POST" }).catch((e) => {
+      notify(e.message, "error");
+      setState("idle");
+    });
+  }
+  async function up() {
+    if (state !== "recording") return;
+    setState("working");
+    try {
+      const r = await api<any>("/v1/ptt/stop", { method: "POST", json: { speak: auto, voice: folder?.id } });
+      if (r.text) onText(r.text, r.language, r.accent_warning ?? null);
+    } catch (e: any) {
+      notify(e.message, "error");
+    } finally {
+      setState("idle");
+    }
+  }
+  return (
+    <>
+      <button
+        class={`mic-btn ${state}`}
+        disabled={disabled}
+        onPointerDown={down}
+        onPointerUp={up}
+        onPointerLeave={up}
+        title={`按住说话，松开后识别并${auto ? "自动念出来" : "填进输入框"}${key ? `；全局快捷键：按住 ${hotkeyLabel(key)}` : ""}`}
+      >
+        {state === "recording" ? "● 正在听…" : state === "working" ? "识别中…" : "🎙 按住说话"}
+      </button>
+      <label class="check slim" title="识别后马上用这个声音念出来">
+        <input
+          type="checkbox"
+          checked={auto}
+          onChange={(e) => {
+            const v = (e.target as HTMLInputElement).checked;
+            setAuto(v);
+            api("/v1/settings", { method: "PATCH", json: { ptt: { auto_speak: v } } }).catch(() => {});
+          }}
+        />
+        自动念
+      </label>
+      {key && <span class="muted">或按住 <kbd>{hotkeyLabel(key)}</kbd></span>}
+    </>
   );
 }

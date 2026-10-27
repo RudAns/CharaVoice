@@ -40,8 +40,20 @@ const DICTATION_HOTKEYS: &[&str] = &["ctrl+alt+space", "ctrl+shift+space", "alt+
 /// Simple-mode recording hotkey candidates (Ctrl+Shift+R is left alone: browsers use it to reload).
 const RECORD_HOTKEYS: &[&str] = &["ctrl+alt+r", "ctrl+alt+shift+r", "alt+shift+r", "ctrl+alt+f9"];
 
+/// Push-to-talk hotkey candidates (hold to speak, release to have it read back).
+const PTT_HOTKEYS: &[&str] = &["ctrl+alt+v", "ctrl+alt+shift+v", "alt+shift+v", "ctrl+alt+f10"];
+
 #[derive(Default)]
 struct Hotkey(Mutex<String>);
+
+/// The push-to-talk hotkey in effect and its id.
+#[derive(Default)]
+struct PttHotkey(Mutex<(String, u32)>);
+
+#[tauri::command]
+fn ptt_hotkey(app: AppHandle) -> String {
+    app.state::<PttHotkey>().0.lock().unwrap().0.clone()
+}
 
 /// The recording hotkey in effect and its id (to tell it apart from the dictation one).
 #[derive(Default)]
@@ -376,6 +388,12 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
+                    // push to talk needs both edges: pressed starts the microphone, released stops it
+                    if app.state::<PttHotkey>().0.lock().unwrap().1 == shortcut.id() {
+                        let down = event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed;
+                        let _ = app.emit("ptt-hotkey", down);
+                        return;
+                    }
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         if app.state::<RecordHotkey>().0.lock().unwrap().1 == shortcut.id() {
                             on_record_hotkey(app);
@@ -390,6 +408,7 @@ pub fn run() {
         .manage(Backend::default())
         .manage(Hotkey::default())
         .manage(RecordHotkey::default())
+        .manage(PttHotkey::default())
         .setup(|app| {
             // Another program may already own a combination; take the first one that is free.
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -397,6 +416,13 @@ pub fn run() {
                 if app.global_shortcut().register(*key).is_ok() {
                     *app.state::<Hotkey>().0.lock().unwrap() = key.to_string();
                     build_dictation_window(app.handle(), false);
+                    break;
+                }
+            }
+            for key in PTT_HOTKEYS {
+                let Ok(sc) = key.parse::<tauri_plugin_global_shortcut::Shortcut>() else { continue };
+                if app.global_shortcut().register(sc).is_ok() {
+                    *app.state::<PttHotkey>().0.lock().unwrap() = (key.to_string(), sc.id());
                     break;
                 }
             }
@@ -415,7 +441,7 @@ pub fn run() {
                 let _ = w.app_handle().emit("companion", false);
             }
         })
-        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, record_hotkey, show_main, tool_paths, set_backend_paused])
+        .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, record_hotkey, show_main, tool_paths, set_backend_paused, ptt_hotkey])
         .build(tauri::generate_context!())
         .expect("error while building CharaVoice")
         .run(|app, event| {

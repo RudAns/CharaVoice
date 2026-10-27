@@ -421,7 +421,7 @@ button.ghost { background: transparent; border-color: transparent; color: var(--
   background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; }
 .step-title { font-weight: 600; font-size: 15px; }
 .sm-empty { padding: 10px 4px; line-height: 1.8; }
-.sm-empty kbd, .sm-hotkey kbd { white-space: nowrap; font: 600 12.5px/1 "Cascadia Mono", Consolas, monospace; padding: 4px 8px; border-radius: 6px;
+.sm-empty kbd, .sm-hotkey kbd, .sm-read kbd { white-space: nowrap; font: 600 12.5px/1 "Cascadia Mono", Consolas, monospace; padding: 4px 8px; border-radius: 6px;
   background: #222a3d; border: 1px solid #3a4460; border-bottom-width: 2px; color: #fff; }
 
 .sm-flist { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 4px; margin: 0 -4px; padding: 0 4px; }
@@ -558,3 +558,8 @@ canvas.ce-wave { flex: 1 1 0; height: 0; min-height: 190px; max-height: 340px; }
 .mcp .card + h3 { margin-top: 22px; }
 .service input.num { width: 64px; padding: 3px 6px; margin: 0 6px; }
 .service .btn-row { margin-top: 4px; }
+
+.sf-lang { font-size: 11px; color: #c4b5fd; border: 1px solid #3b3566; border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+.mic-btn { user-select: none; touch-action: none; }
+.mic-btn.recording { background: #3a1820; border-color: #ef4444; color: #fecaca; }
+.mic-btn.working { opacity: .8; }

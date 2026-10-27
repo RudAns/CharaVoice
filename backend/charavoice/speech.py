@@ -266,7 +266,8 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
         from . import simple
 
         base = {**base, **simple.deess_cfg(v["id"])}
-        language = language or simple.LANG
+        if not language or language == "auto":
+            language = simple.text_lang(text, simple.lang_of(v["id"]))
         speed = speed or simple.read_speed(v["id"])
         v = simple.route(v)
     req = build_request(v, text, language, speed, streaming_mode, emotion)
