@@ -86,6 +86,7 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
   const [ask, setAsk] = useState<Ask | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; clip: Clip } | null>(null);
+  const [folderMenu, setFolderMenu] = useState<{ x: number; y: number; folder: Folder } | null>(null);
   const [dragClip, setDragClip] = useState<{ clip: Clip; x: number; y: number; over: string | null } | null>(null);
   const [dropOver, setDropOver] = useState<string | null>(null);
   const [devices, setDevices] = useState<{ index: number; name: string; default: boolean }[]>([]);
@@ -464,27 +465,32 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
                   onClick={() => pick(f.id)}
                 >
                   <div class="sf-top">
-                    <span class="sf-name">{f.name}</span>
-                    <span class="sf-lang" title={f.lang_auto ? "第一段片段保存后自动识别" : "素材语言：这个人在素材里说的语言；克隆后日语、中文、英语都能说，素材语言最像"}>
-                      素材{f.lang_auto ? "待识别" : LANG_NAME[f.language ?? "ja"]}
-                    </span>
-                    <span class={`sf-state ${fj ? "run" : f.ready ? "trained" : ""}`}>
-                      {fj ? `训练中 ${Math.round(fj.progress * 100)}%` : f.ready ? "已就绪" : "未训练"}
-                    </span>
+                    <span class="sf-name" title={f.name}>{f.name}</span>
+                    {view === "library" && (
+                      <button
+                        class="sf-more"
+                        title="更多操作"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setFolderMenu({ x: r.right, y: r.bottom, folder: f });
+                        }}
+                      >
+                        ⋯
+                      </button>
+                    )}
                   </div>
                   <div class="sf-meta">
+                    <span title="素材语言：这个人在素材里说的语言；克隆后日语、中文、英语都能说，素材语言最像">
+                      素材{f.lang_auto ? "待识别" : LANG_NAME[f.language ?? "ja"]}
+                    </span>
+                    {" · "}
+                    <span class={fj ? "st-run" : f.ready ? "st-ok" : "st-none"}>{fj ? `训练中 ${Math.round(fj.progress * 100)}%` : f.ready ? "已就绪" : "未训练"}</span>
+                    {" · "}
                     {f.clips} 段 · {mmss(f.seconds)}
                     {view === "train" && f.cloned && ` · ${f.cloned.at.slice(5, 16).replace("T", " ")} 训练`}
                     {f.dirty && <span class="sf-dirty"> · 有新素材</span>}
                   </div>
-                  {view === "library" && f.id === cur && (
-                    <div class="sf-actions">
-                      <button class="small" onClick={(e) => { e.stopPropagation(); renameFolder(f); }}>重命名</button>
-                      <button class="small" onClick={(e) => { e.stopPropagation(); changeLanguage(f); }}>语言</button>
-                      <button class="small" onClick={(e) => { e.stopPropagation(); api(`/v1/simple/folders/${f.id}/open`, { method: "POST" }).catch((er) => notify(er.message, "error")); }}>打开</button>
-                      <button class="small danger" onClick={(e) => { e.stopPropagation(); deleteFolder(f); }}>删除</button>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -726,6 +732,17 @@ export function Simple({ view = "library" }: { view?: "library" | "train" }) {
           </div>
         </div>
       )}
+      {folderMenu && (
+        <div class="ctx-back" onClick={() => setFolderMenu(null)} onContextMenu={(e) => { e.preventDefault(); setFolderMenu(null); }}>
+          <div class="ctx" style={{ left: Math.min(folderMenu.x - 180, innerWidth - 200), top: Math.min(folderMenu.y + 4, innerHeight - 200) }} onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => { const f = folderMenu.folder; setFolderMenu(null); renameFolder(f); }}>重命名</button>
+            <button onClick={() => { const f = folderMenu.folder; setFolderMenu(null); changeLanguage(f); }}>素材语言…</button>
+            <button onClick={() => { const f = folderMenu.folder; setFolderMenu(null); api(`/v1/simple/folders/${f.id}/open`, { method: "POST" }).catch((er) => notify(er.message, "error")); }}>在资源管理器中打开</button>
+            <div class="ctx-sep" />
+            <button class="danger-text" onClick={() => { const f = folderMenu.folder; setFolderMenu(null); deleteFolder(f); }}>删除…</button>
+          </div>
+        </div>
+      )}
       {dragClip && (
         <div class="drag-ghost" style={{ left: dragClip.x + 12, top: dragClip.y + 8 }}>
           {dragClip.clip.name} · {dragClip.clip.duration.toFixed(1)} 秒{dragClip.over && dragClip.over !== cur ? ` → ${folders.find((f) => f.id === dragClip.over)?.name}` : ""}
@@ -841,10 +858,23 @@ export function sentences(text: string): string[] {
   return out;
 }
 
-const TRY_SAMPLES: Record<string, string> = {
-  ja: "こんにちは。今日はいい天気ですね、少し散歩に行きませんか。",
-  zh: "你好，今天天气真不错，要不要一起出去走走？",
-  en: "Hello there. It's a lovely day today, would you like to go for a walk?",
+/** Same rule as the backend (simple.text_lang): kana = ja, Latin only = en, kanji without kana =
+ *  zh unless it is a short word without Chinese-only forms or punctuation (then the material's). */
+function guessLang(text: string, material: string): "ja" | "zh" | "en" {
+  if (/[぀-ヿ]/.test(text)) return "ja";
+  const han = text.match(/[㐀-鿿]/g) ?? [];
+  if (han.length) {
+    const zhOnly = /[们这说时个为对还进么样吗呢吧见话语让谁给边过经点门问间东车长开关电现]|[，；：“”？！]/.test(text);
+    return material === "ja" && han.length <= 4 && !zhOnly ? "ja" : "zh";
+  }
+  if (/[A-Za-z]/.test(text)) return "en";
+  return (material as any) ?? "ja";
+}
+
+const TRY_SAMPLES: Record<string, string[]> = {
+  ja: ["こんにちは。今日はいい天気ですね、少し散歩に行きませんか。", "ありがとう。あなたのおかげで、とても楽しい一日になりました。", "明日の朝は早いので、今夜は早めに寝ることにします。"],
+  zh: ["你好，今天天气真不错，要不要一起出去走走？", "谢谢你，多亏了你，今天过得特别开心。", "明天一早还要出门，今晚我想早点休息。"],
+  en: ["Hello there. It's a lovely day today, would you like to go for a walk?", "Thank you, you made today a really happy day for me.", "I have an early start tomorrow, so I'll go to bed a little early tonight."],
 };
 const SAMPLE = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。";
 
@@ -890,9 +920,12 @@ async function* pcmChunks(r: Response): AsyncGenerator<{ sr: number; pcm: Float3
 
 function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy: boolean; mini?: boolean }) {
   const lang = folder?.language ?? "ja";
-  const [text, setText] = useState(() => (mini ? TRY_SAMPLES[lang] : lsGet("cv.simple.text") ?? SAMPLE));
+  const [text, setText] = useState(() => (mini ? TRY_SAMPLES[lang][0] : lsGet("cv.simple.text") ?? SAMPLE));
+  const sampleIdx = useRef(0);
+  const [langMenu, setLangMenu] = useState(false);
   const [heard, setHeard] = useState<{ language?: string; warn?: string | null } | null>(null);
   const [speakLang, setSpeakLang] = useState(folder?.speak_lang ?? "auto");
+  const readLang = speakLang !== "auto" ? speakLang : guessLang(text, lang);
   const [state, setState] = useState<"idle" | "playing" | "paused">("idle");
   const [idx, setIdx] = useState(-1);
   const [waiting, setWaiting] = useState(false);
@@ -911,7 +944,7 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
 
   useEffect(() => {
     setSpeed(folder?.read_speed ?? 0.9);
-    if (mini) setText(lsGet(`cv.try.${folder?.id}`) ?? TRY_SAMPLES[folder?.language ?? "ja"]);
+    if (mini) setText(lsGet(`cv.try.${folder?.id}`) ?? TRY_SAMPLES[folder?.language ?? "ja"][0]);
     setHeard(null);
     setSpeakLang(folder?.speak_lang ?? "auto");
     // the push-to-talk hotkey reads back in the voice open on this page
@@ -1072,6 +1105,151 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
     }
   }
 
+  if (mini) {
+    const guessed = guessLang(text, lang);
+    const nextSample = () => {
+      const l = speakLang !== "auto" ? speakLang : guessed;
+      sampleIdx.current = (sampleIdx.current + 1) % TRY_SAMPLES[l].length;
+      setText(TRY_SAMPLES[l][sampleIdx.current]);
+      setHeard(null);
+    };
+    const pickLang = (l: "auto" | "ja" | "zh" | "en") => {
+      setLangMenu(false);
+      changeSpeakLang(l);
+    };
+    return (
+      <section class="card sm-step sm-read try">
+        <div class="try-head">
+          <div class="step-title">试听</div>
+          {folder && (
+            <span class="try-voice" title={`试听和按住说话都用“${folder.name}”念；素材是${LANG_NAME[lang]}`}>
+              {folder.name}
+              <span class="muted">（素材{LANG_NAME[lang]}）</span>
+            </span>
+          )}
+        </div>
+        {state === "idle" ? (
+          <div class="try-box">
+            <input
+              class="try-input"
+              lang={readLang}
+              value={text}
+              placeholder="输入一句话（日语、中文、英语都可以）"
+              onInput={(e) => {
+                const v = (e.target as HTMLInputElement).value;
+                setText(v);
+                setHeard(null);
+                try {
+                  localStorage.setItem(`cv.try.${folder?.id}`, v);
+                } catch {}
+              }}
+              onKeyDown={(e) => e.key === "Enter" && ready && !busy && start()}
+            />
+            <div class="try-foot">
+              <div class="lang-pick">
+                <button class="pill" onClick={() => setLangMenu(!langMenu)} title="按什么语言念">
+                  {speakLang === "auto" ? `识别为：${LANG_NAME[guessed]}` : `固定：${LANG_NAME[speakLang]}`} ▾
+                </button>
+                {langMenu && (
+                  <div class="menu" onMouseLeave={() => setLangMenu(false)}>
+                    <button class={speakLang === "auto" ? "on" : ""} onClick={() => pickLang("auto")}>
+                      自动（按文字判断）
+                    </button>
+                    {(["ja", "zh", "en"] as const).map((l) => (
+                      <button class={speakLang === l ? "on" : ""} onClick={() => pickLang(l)}>
+                        固定{LANG_NAME[l]}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <span
+                class="info"
+                title={`一个声音训练好后，日语、中文、英语都能说，输入什么语言就念什么语言。素材是${LANG_NAME[lang]}，说${LANG_NAME[lang]}最像；其他语言会少像一些、可能带口音，补充该语言的素材会更像。按住说话时“自动”跟随你说的语言。`}
+              >
+                ⓘ
+              </span>
+              <div class="grow" />
+              <button class="ghost small" onClick={nextSample} title="按当前语言换一句示例">
+                ↻ 换一句示例
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div class="sm-reading" lang={readLang}>
+            {list.map((s, i) => (
+              <span class={i === idx ? "now" : i < idx ? "done" : ""}>{s}</span>
+            ))}
+          </div>
+        )}
+        {speakLang !== "auto" && guessed !== speakLang && text.trim() && (
+          <p class="try-note">文本看起来是{LANG_NAME[guessed]}，现在固定按{LANG_NAME[speakLang]}念。</p>
+        )}
+        {readLang !== lang && <p class="try-note muted-note">素材是{LANG_NAME[lang]}，说{LANG_NAME[readLang]}会少像一些，补充{LANG_NAME[readLang]}素材会更像。</p>}
+        {heard?.warn && readLang === lang && <p class="try-note muted-note">{heard.warn}</p>}
+        {!ready && folder && <p class="muted">训练完成后就能在这里试听。</p>}
+        {ready && mode === "trained" && eng?.state !== "ready" && (
+          <p class="muted">
+            语音引擎{eng?.state === "starting" ? "正在启动…" : "未启动。"}
+            {eng?.state !== "starting" && <button class="small" onClick={() => api("/v1/engine/start", { method: "POST" }).catch((e) => notify(e.message, "error"))}>启动引擎</button>}
+          </p>
+        )}
+        <div class="try-actions">
+          {state === "idle" ? (
+            <button class="primary" disabled={!ready || busy || !list.length} onClick={start}>
+              ▶ 试听
+            </button>
+          ) : (
+            <>
+              <button class="primary" onClick={pause}>{state === "playing" ? "❚❚ 暂停" : "▶ 继续"}</button>
+              <button onClick={stop}>■ 停止</button>
+            </>
+          )}
+          <MicButton folder={folder} disabled={!ready || busy} onText={(t, l, w) => { setText(t); setHeard({ language: l, warn: w }); }} />
+          {waiting && <span class="muted">正在合成…</span>}
+        </div>
+        <details class="sm-more">
+          <summary>朗读设置（语速、音质、去齿音，对 Agent 调用同样生效）</summary>
+          <div class="sm-speed">
+            <span>音质</span>
+            <div class="seg">
+              <button class={mode === "trained" ? "on" : ""} disabled={switching} onClick={() => changeMode("trained")} title="用这个文件夹训练 / 克隆出的声线，速度最快">
+                标准
+              </button>
+              <button class={mode === "omnivoice" ? "on" : ""} disabled={switching} onClick={() => changeMode("omnivoice")} title="用 OmniVoice 从文件夹里最干净的几句零样本克隆：s、sh 更自然，音色稍微没那么像">
+                音质优先
+              </button>
+            </div>
+            {mode === "omnivoice" && <span class="muted">合成会慢一些</span>}
+          </div>
+          <label class="sm-speed">
+            <span>语速</span>
+            <input type="range" min="0.7" max="1.2" step="0.05" value={speed} onInput={(e) => changeSpeed(+(e.target as HTMLInputElement).value)} />
+            <span class="sm-speed-val">{speed.toFixed(2)}×</span>
+            {speed !== 0.9 && <button class="small ghost" onClick={() => changeSpeed(0.9)}>默认</button>}
+          </label>
+          <div class="sm-speed" title="压低过重的 s、sh 齿音。轻 / 中只压超出这个声线平常齿音水平的部分；强会连正常的齿音也压一些">
+            <span>去齿音</span>
+            <div class="seg">
+              {(
+                [
+                  ["off", "关"],
+                  ["light", "轻"],
+                  ["medium", "中"],
+                  ["strong", "强"],
+                ] as const
+              ).map(([k, label]) => (
+                <button class={deess === k ? "on" : ""} onClick={() => changeDeess(k)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </details>
+      </section>
+    );
+  }
+
   return (
     <section class={`card sm-step sm-read ${mini ? "mini" : ""}`}>
       <div class="step-head">
@@ -1081,44 +1259,37 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
         {folder && <span class="sm-voice-now" title="试听、按住说话（包括全局快捷键）都用这个声音">当前声音：<strong>{folder.name}</strong>（{LANG_NAME[lang]}）</span>}
       </div>
       {mini && state === "idle" ? (
-        <input
-          class="sm-try"
-          lang={lang}
-          value={text}
-          placeholder="输入一句话，或按住麦克风说一句"
-          onInput={(e) => {
-            const v = (e.target as HTMLInputElement).value;
-            setText(v);
-            setHeard(null);
-            try {
-              localStorage.setItem(`cv.try.${folder?.id}`, v);
-            } catch {}
-          }}
-          onKeyDown={(e) => e.key === "Enter" && ready && !busy && start()}
-        />
-      ) : null}
-      {mini && state === "idle" && (
-        <div class="sm-langs">
-          <span>念的语言</span>
-          <div class="seg">
-            {(["auto", "ja", "zh", "en"] as const).map((l) => (
-              <button class={speakLang === l ? "on" : ""} onClick={() => changeSpeakLang(l)} title={l === "auto" ? "按输入的文字判断（按住说话时跟随识别出的语言）" : `一律按${LANG_NAME[l]}念`}>
-                {l === "auto" ? "自动" : LANG_NAME[l]}
-              </button>
-            ))}
-          </div>
-          <span class="muted">示例：</span>
-          {(["ja", "zh", "en"] as const).map((l) => (
-            <button class="small" onClick={() => { setText(TRY_SAMPLES[l]); setHeard(null); }}>
-              {LANG_NAME[l]}
-            </button>
-          ))}
+        <div class="try-row">
+          <input
+            class="sm-try"
+            lang={lang}
+            value={text}
+            placeholder="输入一句话（日语、中文、英语都行），或按住下面的麦克风说一句"
+            onInput={(e) => {
+              const v = (e.target as HTMLInputElement).value;
+              setText(v);
+              setHeard(null);
+              try {
+                localStorage.setItem(`cv.try.${folder?.id}`, v);
+              } catch {}
+            }}
+            onKeyDown={(e) => e.key === "Enter" && ready && !busy && start()}
+          />
+          <select
+            class="try-lang"
+            value={speakLang}
+            title="按什么语言念：自动 = 按输入的文字判断（按住说话时跟随你说的语言）"
+            onChange={(e) => changeSpeakLang((e.target as HTMLSelectElement).value as any)}
+          >
+            <option value="auto">自动 · {LANG_NAME[readLang]}</option>
+            <option value="ja">日语</option>
+            <option value="zh">中文</option>
+            <option value="en">英语</option>
+          </select>
         </div>
-      )}
-      {mini && state === "idle" && (
-        <p class="muted small-note">
-          一个声音训练好后，日语、中文、英语都能说，输入什么语言就念什么语言。素材是{LANG_NAME[lang]}，说{LANG_NAME[lang]}最像；其他语言会少像一些、可能带口音，补充该语言的素材会更像。
-        </p>
+      ) : null}
+      {mini && state === "idle" && readLang !== lang && (
+        <p class="try-note">说{LANG_NAME[readLang]}会比说{LANG_NAME[lang]}少像一些，可能带口音；补充{LANG_NAME[readLang]}素材会更像。</p>
       )}
       {mini ? null : state === "idle" ? (
         <textarea
@@ -1192,6 +1363,16 @@ function ReadCard({ folder, busy, mini = false }: { folder: Folder | null; busy:
           <>
             <button class="primary" disabled={!ready || busy || !list.length} onClick={start}>▶ {mini ? "试听" : "朗读"}</button>
             {mini && <MicButton folder={folder} disabled={!ready || busy} onText={(t, l, w) => { setText(t); setHeard({ language: l, warn: w }); }} />}
+            {mini && (
+              <span class="try-samples">
+                示例
+                {(["ja", "zh", "en"] as const).map((l) => (
+                  <a href="#" onClick={(e) => { e.preventDefault(); setText(TRY_SAMPLES[l][0]); setHeard(null); }}>
+                    {LANG_NAME[l]}
+                  </a>
+                ))}
+              </span>
+            )}
           </>
         ) : (
           <>
@@ -1254,31 +1435,40 @@ function MicButton({ folder, disabled, onText }: { folder: Folder | null; disabl
       setState("idle");
     }
   }
+  const [menu, setMenu] = useState(false);
   return (
-    <>
+    <div class="mic-split">
       <button
         class={`mic-btn ${state}`}
         disabled={disabled}
         onPointerDown={down}
         onPointerUp={up}
         onPointerLeave={up}
-        title={`按住说话，松开后识别并${auto ? "自动念出来" : "填进输入框"}${key ? `；全局快捷键：按住 ${hotkeyLabel(key)}` : ""}`}
+        title={`按住说话，松开后识别并${auto ? "用这个声音念出来" : "填进输入框"}${key ? `；在任何地方按住 ${hotkeyLabel(key)} 也可以` : ""}`}
       >
-        {state === "recording" ? "● 正在听…" : state === "working" ? "识别中…" : "🎙 按住说话"}
+        <span class="mic-main">{state === "recording" ? "● 正在听…" : state === "working" ? "识别中…" : "🎙 按住说话"}</span>
+        {key && <span class="mic-sub">{hotkeyLabel(key)}</span>}
       </button>
-      <label class="check slim" title="识别后马上用这个声音念出来">
-        <input
-          type="checkbox"
-          checked={auto}
-          onChange={(e) => {
-            const v = (e.target as HTMLInputElement).checked;
-            setAuto(v);
-            api("/v1/settings", { method: "PATCH", json: { ptt: { auto_speak: v } } }).catch(() => {});
-          }}
-        />
-        自动念
-      </label>
-      {key && <span class="muted">或按住 <kbd>{hotkeyLabel(key)}</kbd>（用{folder ? `“${folder.name}”` : "当前声音"}念）</span>}
-    </>
+      <button class="mic-caret" disabled={disabled} onClick={() => setMenu(!menu)} title="按住说话的选项">
+        ▾
+      </button>
+      {menu && (
+        <div class="menu right" onMouseLeave={() => setMenu(false)}>
+          <label class="check slim">
+            <input
+              type="checkbox"
+              checked={auto}
+              onChange={(e) => {
+                const v = (e.target as HTMLInputElement).checked;
+                setAuto(v);
+                api("/v1/settings", { method: "PATCH", json: { ptt: { auto_speak: v } } }).catch(() => {});
+              }}
+            />
+            识别后自动念出来
+          </label>
+          <p class="muted small-note">关掉后只把识别出的文字填进输入框。</p>
+        </div>
+      )}
+    </div>
   );
 }
