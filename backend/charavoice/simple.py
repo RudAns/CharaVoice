@@ -37,6 +37,9 @@ REC_VOICE = "__simple__"  # Recording.voice for hotkey recordings (not a real vo
 SAME_SPEAKER = 0.5  # CAM++ cosine: same person usually 0.6-0.85, different people below 0.4
 CLIP_GAP = 0.3  # seconds of silence between kept ranges inside one saved clip
 TRAIN_BASE = "v2ProPlus"
+# Reading speed for articles: cloned anime/game voices copy their source's fast delivery, and
+# 0.9 brings a typical 6.5-7 chars/s down to a relaxed reading pace.
+READ_SPEED = 0.9
 _lock = threading.RLock()
 
 
@@ -121,6 +124,7 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "job": j.public() if j else None,
         "path": str(clip_dir(vid).resolve()),
         "est": {"zero_shot": est_minutes(secs, False), "train": est_minutes(secs, True)},
+        "read_speed": data.get("read_speed", READ_SPEED),
     }
 
 
@@ -136,6 +140,18 @@ def create_folder(name: str) -> dict[str, Any]:
     clip_dir(v["id"]).mkdir(parents=True, exist_ok=True)
     _save_clips(v["id"], {"clips": [], "cloned": None})
     return summary(v)
+
+
+def set_read_speed(vid: str, speed: float) -> float:
+    with _lock:
+        data = load_clips(vid)
+        data["read_speed"] = round(float(min(1.3, max(0.6, speed))), 2)
+        _save_clips(vid, data)
+    return data["read_speed"]
+
+
+def read_speed(vid: str) -> float:
+    return float(load_clips(vid).get("read_speed", READ_SPEED))
 
 
 def folder_detail(vid: str) -> dict[str, Any]:
@@ -633,14 +649,26 @@ def chunks(text: str, limit: int = 1200) -> list[str]:
     return [c for c in (x.strip() for x in out) if c]
 
 
-async def export(vid: str, text: str, fmt: str = "wav") -> dict[str, Any]:
+async def warm(vid: str) -> None:
+    """Load the folder's weights and run one short sentence, so the first read starts quickly
+    (a freshly trained voice otherwise pays weight loading and first-inference set-up)."""
+    from . import speech
+
+    try:
+        job = speech.start("こんにちは。", vid, LANG, play=False, naturalness=False)
+        await job.done.wait()
+    except Exception as e:  # engine stopped or busy training: nothing to warm
+        log.info("warm-up of %s skipped: %s", vid, e)
+
+
+async def export(vid: str, text: str, fmt: str = "wav", speed: float | None = None) -> dict[str, Any]:
     from . import compliance, speech
 
     fmt = fmt if fmt in ("wav", "mp3") else "wav"
     v = voices.get(vid)
     parts, sr = [], 0
     for c in chunks(text):
-        job = speech.start(c, vid, LANG, play=False)
+        job = speech.start(c, vid, LANG, play=False, speed=speed or read_speed(vid))
         await job.done.wait()
         if job.error:
             raise RuntimeError(job.error)

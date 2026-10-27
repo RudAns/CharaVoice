@@ -518,3 +518,6 @@ canvas.ce-wave { flex: 1 1 0; height: 0; min-height: 190px; max-height: 340px; }
 .rb-error .rb-dot { background: var(--warn); }
 .rb-text { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .rb-key { font-size: 11px; color: #9aa3ba; border: 1px solid #39415a; border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+.sm-speed { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.sm-speed input { flex: 1; max-width: 200px; }
+.sm-speed-val { font-variant-numeric: tabular-nums; min-width: 42px; color: #cbd5e1; }

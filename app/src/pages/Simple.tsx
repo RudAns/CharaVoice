@@ -9,7 +9,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { api, engine, onEvent, url } from "../api";
+import { api, conn, engine, onEvent, url } from "../api";
 import { ClipEditor } from "../components/ClipEditor";
 import { notify, pendingRec, remember } from "../store";
 import { hotkeyLabel } from "./Settings";
@@ -36,6 +36,7 @@ interface Folder {
   job: Job | null;
   path: string;
   est: { zero_shot: number; train: number };
+  read_speed?: number;
 }
 interface Clip {
   id: string;
@@ -693,76 +694,164 @@ export function sentences(text: string): string[] {
 
 const SAMPLE = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。";
 
+/** Read a streamed WAV response (header with unknown length, then 16-bit PCM) chunk by chunk. */
+async function* pcmChunks(r: Response): AsyncGenerator<{ sr: number; pcm: Float32Array<ArrayBuffer> }> {
+  const reader = r.body!.getReader();
+  let head = new Uint8Array(0);
+  let sr = 0;
+  let carry: number | null = null; // odd byte left over from the previous chunk
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    let bytes = value;
+    if (!sr) {
+      const h = new Uint8Array(head.length + bytes.length);
+      h.set(head);
+      h.set(bytes, head.length);
+      if (h.length < 44) {
+        head = h;
+        continue;
+      }
+      sr = new DataView(h.buffer).getUint32(24, true);
+      bytes = h.subarray(44);
+    }
+    if (carry !== null) {
+      const c = new Uint8Array(bytes.length + 1);
+      c[0] = carry;
+      c.set(bytes, 1);
+      bytes = c;
+      carry = null;
+    }
+    if (bytes.length % 2) {
+      carry = bytes[bytes.length - 1];
+      bytes = bytes.subarray(0, bytes.length - 1);
+    }
+    if (!bytes.length) continue;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+    const pcm = new Float32Array(bytes.length / 2);
+    for (let i = 0; i < pcm.length; i++) pcm[i] = view.getInt16(i * 2, true) / 32768;
+    yield { sr, pcm };
+  }
+}
+
 function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
   const [text, setText] = useState(() => lsGet("cv.simple.text") ?? SAMPLE);
   const [state, setState] = useState<"idle" | "playing" | "paused">("idle");
   const [idx, setIdx] = useState(-1);
   const [waiting, setWaiting] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
-  const run = useRef<{ abort: AbortController; audio: HTMLAudioElement; urls: string[] } | null>(null);
+  const [speed, setSpeed] = useState(folder?.read_speed ?? 0.9);
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
+  const saveTimer = useRef(0);
+  const run = useRef<{ abort: AbortController; ctx: AudioContext } | null>(null);
   const list = useMemo(() => sentences(text), [text]);
   const eng = engine.value;
   const ready = !!folder?.ready;
 
-  useEffect(() => () => stop(), [folder?.id]);
+  useEffect(() => {
+    setSpeed(folder?.read_speed ?? 0.9);
+    return () => stop();
+  }, [folder?.id]);
+  // load the voice before the first read (weights + first inference), so it starts within a second
+  useEffect(() => {
+    if (folder?.ready && eng?.state === "ready") api(`/v1/simple/folders/${folder.id}/warm`, { method: "POST" }).catch(() => {});
+  }, [folder?.id, folder?.ready, eng?.state]);
 
-  async function synth(s: string, signal: AbortSignal): Promise<string> {
-    const blob = await api<Blob>("/v1/audio/speech", {
-      method: "POST",
-      json: { input: s, voice: folder!.id, language: "ja", play: false, response_format: "wav" },
-      signal,
-    });
-    return URL.createObjectURL(blob);
+  function changeSpeed(v: number) {
+    setSpeed(v);
+    clearTimeout(saveTimer.current);
+    const id = folder?.id;
+    saveTimer.current = window.setTimeout(() => id && api(`/v1/simple/folders/${id}`, { method: "PATCH", json: { read_speed: v } }).catch(() => {}), 400);
   }
+
   async function start() {
-    if (!folder || !list.length) return;
+    if (!folder || !list.length || !conn.value) return;
     stop();
     const abort = new AbortController();
-    const audio = new Audio();
-    const r = { abort, audio, urls: [] as string[] };
+    const ctx = new AudioContext();
+    const r = { abort, ctx };
     run.current = r;
     setState("playing");
-    // sentence-level streaming: play sentence i while sentences i+1 and i+2 are being synthesized
-    const jobs: Promise<string>[] = [];
-    const want = (i: number) => {
-      if (i < list.length && !jobs[i]) {
-        jobs[i] = synth(list[i], abort.signal);
-        jobs[i].then((u) => r.urls.push(u), () => {});
-      }
+    setIdx(0);
+    // Each sentence is streamed (first sound after its first clause) and scheduled back to back on
+    // one AudioContext; the next sentence is requested as soon as the previous one has arrived,
+    // so synthesis runs ahead of playback. Pause/resume suspend the context.
+    let t = ctx.currentTime + 0.05;
+    const starts: number[] = [];
+    let raf = 0;
+    const follow = () => {
+      if (run.current !== r) return;
+      const now = ctx.currentTime;
+      let k = 0;
+      while (k + 1 < starts.length && starts[k + 1] <= now) k++;
+      setIdx(k);
+      raf = requestAnimationFrame(follow);
     };
+    raf = requestAnimationFrame(follow);
     try {
       for (let i = 0; i < list.length; i++) {
-        want(i);
-        want(i + 1);
-        want(i + 2);
-        setIdx(i);
+        // stay at most ~20 s ahead of what is playing
+        while (t - ctx.currentTime > 20) {
+          await new Promise((ok) => setTimeout(ok, 300));
+          if (run.current !== r) return;
+        }
         setWaiting(true);
-        const u = await jobs[i];
-        setWaiting(false);
-        if (run.current !== r) return;
-        audio.src = u;
-        await new Promise<void>((done, fail) => {
-          audio.onended = () => done();
-          audio.onerror = () => fail(new Error("播放失败"));
-          abort.signal.addEventListener("abort", () => done(), { once: true });
-          audio.play().catch(fail);
+        const res = await fetch(url("/v1/audio/speech"), {
+          method: "POST",
+          signal: abort.signal,
+          headers: { Authorization: `Bearer ${conn.value!.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ input: list[i], voice: folder.id, language: "ja", play: false, stream: true, response_format: "wav", speed: speedRef.current }),
         });
+        if (!res.ok) {
+          let msg = `${res.status}`;
+          try {
+            const j = await res.json();
+            msg = j?.error?.message ?? msg;
+          } catch {}
+          throw new Error(msg);
+        }
+        let first = true;
+        for await (const { sr, pcm } of pcmChunks(res)) {
+          if (run.current !== r) return;
+          const buf = ctx.createBuffer(1, pcm.length, sr);
+          buf.copyToChannel(pcm, 0);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(ctx.destination);
+          t = Math.max(t, ctx.currentTime + 0.03);
+          if (first) {
+            starts[i] = t;
+            first = false;
+            setWaiting(false);
+          }
+          src.start(t);
+          t += buf.duration;
+        }
+        t += 0.35 / speedRef.current; // a slightly longer rest between sentences when reading
+      }
+      setWaiting(false);
+      // let the last sentence finish
+      while (ctx.currentTime < t - 0.3) {
+        await new Promise((ok) => setTimeout(ok, 200));
         if (run.current !== r) return;
       }
       stop();
     } catch (e: any) {
       if (run.current === r && e?.name !== "AbortError") notify(e.message ?? String(e), "error");
       if (run.current === r) stop();
+    } finally {
+      cancelAnimationFrame(raf);
     }
   }
   function pause() {
     const r = run.current;
     if (!r) return;
     if (state === "playing") {
-      r.audio.pause();
+      r.ctx.suspend();
       setState("paused");
     } else {
-      r.audio.play();
+      r.ctx.resume();
       setState("playing");
     }
   }
@@ -771,8 +860,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
     run.current = null;
     if (r) {
       r.abort.abort();
-      r.audio.pause();
-      r.urls.forEach((u) => URL.revokeObjectURL(u));
+      r.ctx.close().catch(() => {});
     }
     setState("idle");
     setIdx(-1);
@@ -782,7 +870,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
     if (!folder) return;
     setExporting(fmt);
     try {
-      const r = await api<{ path: string; seconds: number }>(`/v1/simple/folders/${folder.id}/export`, { method: "POST", json: { text, format: fmt } });
+      const r = await api<{ path: string; seconds: number }>(`/v1/simple/folders/${folder.id}/export`, { method: "POST", json: { text, format: fmt, speed } });
       notify(`已导出 ${mmss(r.seconds)} 的 ${fmt.toUpperCase()}`);
       revealItemInDir(r.path).catch(() => {});
     } catch (e: any) {
@@ -821,6 +909,12 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
           ))}
         </div>
       )}
+      <label class="sm-speed">
+        <span>语速</span>
+        <input type="range" min="0.7" max="1.2" step="0.05" value={speed} onInput={(e) => changeSpeed(+(e.target as HTMLInputElement).value)} />
+        <span class="sm-speed-val">{speed.toFixed(2)}×</span>
+        {speed !== 0.9 && <button class="small" onClick={() => changeSpeed(0.9)}>默认</button>}
+      </label>
       {!ready && folder && <p class="muted">先完成第 3 步克隆，才能用这个声线朗读。</p>}
       {ready && eng?.state !== "ready" && (
         <p class="muted">

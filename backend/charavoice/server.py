@@ -1349,10 +1349,28 @@ async def simple_folder(vid: str):
     return simple.folder_detail(vid)
 
 
+class FolderPatch(BaseModel):
+    name: str | None = None
+    read_speed: float | None = Field(default=None, ge=0.6, le=1.3, description="朗读语速")
+
+
 @app.patch("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
-async def simple_rename_folder(vid: str, body: FolderBody):
+async def simple_patch_folder(vid: str, body: FolderPatch):
     _folder_or_404(vid)
-    return simple.summary(voices.update(vid, {"name": body.name}))
+    if body.read_speed is not None:
+        simple.set_read_speed(vid, body.read_speed)
+    v = voices.update(vid, {"name": body.name}) if body.name else voices.get(vid)
+    return simple.summary(v)
+
+
+@app.post("/v1/simple/folders/{vid}/warm", dependencies=[Depends(auth)])
+async def simple_warm(vid: str):
+    v = _folder_or_404(vid)
+    j = simple.jobs.get(vid)
+    go = bool(v.get("ref")) and not (j and j.state == "running")
+    if go:
+        asyncio.create_task(simple.warm(vid))
+    return {"warming": go}
 
 
 @app.delete("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
@@ -1497,13 +1515,14 @@ async def simple_clone_cancel(vid: str):
 class ExportBody(BaseModel):
     text: str
     format: str = "wav"
+    speed: float | None = Field(default=None, ge=0.6, le=1.3)
 
 
 @app.post("/v1/simple/folders/{vid}/export", dependencies=[Depends(auth)])
 async def simple_export(vid: str, body: ExportBody):
     _folder_or_404(vid)
     try:
-        return await simple.export(vid, body.text, body.format)
+        return await simple.export(vid, body.text, body.format, body.speed)
     except RuntimeError as e:
         raise ApiError(502, str(e), "synthesis_failed")
 

@@ -152,7 +152,8 @@ export function Settings() {
 const NAT_SWITCHES: { key: string; label: string; hint: string }[] = [
   { key: "pauses", label: "按标点停顿", hint: "逗号、句号、省略号、换段停顿长短不同，并带一点随机变化，不再每句都停一样长" },
   { key: "breaths", label: "呼吸声", hint: "在较长的新句子前偶尔加一口轻呼吸；只用这个声音自己素材里提取的呼吸（声音库里可提取）" },
-  { key: "dynamics", label: "动态与去齿音", hint: "轻度压缩让音量更稳，齿音（s、sh）过重时自动压低" },
+  { key: "deess", label: "去齿音", hint: "s、sh 等齿音过重、发“嘶”时只压低 4.5-11 kHz 齿音频段，最多 8 dB；其他时候声音不变" },
+  { key: "dynamics", label: "动态压缩", hint: "轻度 2:1 压缩，让音量更稳" },
   { key: "loudness", label: "响度统一", hint: "统一到约 -16 LUFS，不同声音、不同句子音量一致" },
   { key: "room", label: "房间感", hint: "极轻的小房间混响和底噪，让声音不那么“干”，停顿不是绝对静音" },
 ];
@@ -162,7 +163,7 @@ function NaturalCard({ s, save }: { s: any; save: (p: any) => void }) {
   const allOn = NAT_SWITCHES.every((x) => n[x.key]);
   const allOff = NAT_SWITCHES.every((x) => !n[x.key]);
   const setAll = (v: boolean) => save({ natural: Object.fromEntries(NAT_SWITCHES.map((x) => [x.key, v])) });
-  const REC: Record<string, boolean> = { pauses: true, breaths: false, dynamics: false, loudness: true, room: false };
+  const REC: Record<string, boolean> = { pauses: true, breaths: false, deess: true, dynamics: false, loudness: true, room: false };
   const isRec = NAT_SWITCHES.every((x) => !!n[x.key] === REC[x.key]);
   return (
     <>

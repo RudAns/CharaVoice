@@ -8,7 +8,7 @@ Generation side
 - Breaths taken from the voice's own material (see breaths.py) are placed in some sentence-final
   pauses before longer sentences, at the speaker's natural breath level.
 Audio side (streaming-safe, one `Post` per utterance)
-- light 2:1 compression, de-essing (5-9 kHz band ducked only when it dominates), loudness
+- de-essing (on by default, see DeEsser), light 2:1 compression, loudness
   normalised to about -16 LUFS (BS.1770 K-weighting, gain decided on the first clause and then
   tracked slowly), a very small synthetic room (RT60 ~0.3 s, wet about -26 dB) and a pink room tone
   around -62 dBFS so pauses are not digital silence, then a soft peak limiter at -1 dBFS.
@@ -31,6 +31,7 @@ import numpy as np
 DEFAULTS = {
     "pauses": True, "comma": 0.2, "sentence": 0.45, "paragraph": 0.8, "jitter": 0.15,
     "breaths": False, "breath_prob": 0.35,
+    "deess": True, "deess_db": 8.0,
     "dynamics": False, "loudness": True, "target_lufs": -16.0,
     "room": False, "room_tone_db": -62.0, "reverb_wet_db": -26.0, "rt60": 0.3,
 }
@@ -53,7 +54,7 @@ def resolve(settings: dict | None, request: bool | str | dict | None) -> dict:
 
 
 def any_post(cfg: dict) -> bool:
-    return bool(cfg.get("dynamics") or cfg.get("loudness") or cfg.get("room"))
+    return bool(cfg.get("deess") or cfg.get("dynamics") or cfg.get("loudness") or cfg.get("room"))
 
 
 # ------------------------------------------------------------------ clause planning
@@ -207,22 +208,70 @@ def _room_ir(sr: int, rt60: float, seed: int = 7) -> np.ndarray:
     return (tail / np.sqrt(np.sum(tail ** 2))).astype(np.float32)
 
 
+class DeEsser:
+    """Split-band dynamic de-esser (streaming, numpy/scipy only).
+
+    A linear-phase FIR band-pass (4.5-11 kHz) splits the signal into the sibilance band and the
+    rest, which add back to the input exactly (rest = delayed input - band), so nothing changes
+    while the band is not reduced. Per 2 ms block the band's share of the total level is measured;
+    when it exceeds -9 dB (an "s"/"sh" dominating) the band alone is turned down by up to
+    `max_db`, 1.5 dB per dB over the threshold, with instant attack and 30 ms release. Cloned
+    voices copy the sibilance of loopback-recorded or compressed material and the 32 kHz vocoder
+    adds hiss on top, which is what reads as a mechanical "s"."""
+
+    THRESHOLD_DB = -9.0
+    SLOPE = 1.5
+
+    def __init__(self, sr: int, max_db: float = 8.0):
+        from scipy.signal import firwin
+
+        self.sr, self.max_db = sr, float(max_db)
+        hi = min(11000.0, sr / 2 * 0.92)
+        n = int(sr * 0.003) | 1  # ~3 ms, odd: integer group delay
+        self.h = firwin(n, [4500.0, hi], pass_zero=False, fs=sr).astype(np.float32)
+        self.d = (n - 1) // 2
+        self.hist = np.zeros(n - 1, np.float32)
+        self.blk = max(1, int(sr * 0.002))
+        self.rel = float(np.exp(-self.blk / (sr * 0.030)))
+        self.gr = 0.0  # current reduction, dB (>= 0)
+        self.pending = np.zeros(0, np.float32)
+
+    def feed(self, x: np.ndarray) -> np.ndarray:
+        """Returns as many samples as it gets, delayed by the filter's group delay."""
+        buf = np.concatenate([self.hist, x.astype(np.float32)])
+        band = np.convolve(buf, self.h, mode="valid")  # len(x)
+        dry = buf[len(self.h) - 1 - self.d : len(buf) - self.d]  # input delayed by d
+        self.hist = buf[len(buf) - (len(self.h) - 1) :]
+        out = dry.copy()
+        nb = (len(x) + self.blk - 1) // self.blk
+        g = np.empty(nb, np.float32)
+        for i in range(nb):
+            a, b = i * self.blk, min(len(x), (i + 1) * self.blk)
+            eb = float(np.sqrt(np.mean(band[a:b] ** 2) + 1e-12))
+            ex = float(np.sqrt(np.mean(dry[a:b] ** 2) + 1e-12))
+            want = 0.0
+            if ex > 1e-3:  # ignore near-silence
+                over = 20 * np.log10(eb / ex) - self.THRESHOLD_DB
+                want = min(self.max_db, max(0.0, over * self.SLOPE))
+            self.gr = want if want > self.gr else want + self.rel * (self.gr - want)
+            g[i] = self.gr
+        k = 1 - 10 ** (-np.repeat(g, self.blk)[: len(x)] / 20)  # fraction of the band to remove
+        return out - band * k
+
+
 class Post:
     """Streaming post-processing for one utterance."""
 
     def __init__(self, sr: int, cfg: dict, seed: int | None = None):
-        from scipy.signal import butter
-
         self.sr, self.cfg = sr, cfg
         self.rng = np.random.default_rng(seed)
         self.gain_db: float | None = None
         self.env = 0.0
-        self.ds = butter(2, [5000 / (sr / 2), min(9000, sr / 2 * 0.95) / (sr / 2)], btype="band", output="sos")
-        self.ds_zi = None
         self.ir = _room_ir(sr, float(cfg["rt60"])) if cfg.get("room") else None
         self.tail = np.zeros(0, np.float32)
         self.pink = np.zeros(7)
         self.loud_hist: list[np.ndarray] = []
+        self.deesser = DeEsser(sr, float(cfg.get("deess_db", 8.0))) if cfg.get("deess") else None
 
     # --- pieces
     def _compress(self, x: np.ndarray) -> np.ndarray:
@@ -247,24 +296,6 @@ class Post:
         lin = np.repeat(10 ** (out / 20), blk)
         lin = np.concatenate([lin, np.full(len(x) - n, lin[-1])])
         return x * lin
-
-    def _deess(self, x: np.ndarray) -> np.ndarray:
-        from scipy.signal import sosfilt, sosfilt_zi
-
-        if self.ds_zi is None:
-            self.ds_zi = sosfilt_zi(self.ds) * 0
-        band, self.ds_zi = sosfilt(self.ds, x, zi=self.ds_zi)
-        blk = max(1, int(self.sr * 0.005))
-        n = len(x) // blk * blk
-        if n == 0:
-            return x
-        eb = np.sqrt(np.mean(band[:n].reshape(-1, blk) ** 2, 1) + 1e-12)
-        ex = np.sqrt(np.mean(x[:n].reshape(-1, blk) ** 2, 1) + 1e-12)
-        ratio_db = 20 * np.log10(eb / ex)
-        cut = np.clip((ratio_db + 8) / 6, 0, 1) * 0.5  # up to -6 dB on the band when sibilance dominates
-        cut = np.repeat(cut, blk)
-        cut = np.concatenate([cut, np.full(len(x) - n, cut[-1])])
-        return x - band * cut
 
     def _loud(self, x: np.ndarray) -> np.ndarray:
         self.loud_hist.append(x)
@@ -305,9 +336,11 @@ class Post:
     def process(self, x: np.ndarray, silent: bool = False) -> np.ndarray:
         """x: float32 clause audio (or silence for pauses when silent=True)."""
         y = x.astype(np.float32)
+        if self.deesser is not None:  # pauses too, so the filter delay stays continuous
+            y = self.deesser.feed(y)
         if not silent:
             if self.cfg.get("dynamics"):
-                y = self._deess(self._compress(y))
+                y = self._compress(y)
             if self.cfg.get("loudness"):
                 y = self._loud(y)
         elif self.cfg.get("loudness") and self.gain_db is not None:
