@@ -31,7 +31,7 @@ import numpy as np
 DEFAULTS = {
     "pauses": True, "comma": 0.2, "sentence": 0.45, "paragraph": 0.8, "jitter": 0.15,
     "breaths": False, "breath_prob": 0.35,
-    "deess": True, "deess_db": 8.0,
+    "deess": True, "deess_db": 8.0, "deess_thr": -9.0,
     "dynamics": False, "loudness": True, "target_lufs": -16.0,
     "room": False, "room_tone_db": -62.0, "reverb_wet_db": -26.0, "rt60": 0.3,
 }
@@ -222,10 +222,12 @@ class DeEsser:
     THRESHOLD_DB = -9.0
     SLOPE = 1.5
 
-    def __init__(self, sr: int, max_db: float = 8.0):
+    def __init__(self, sr: int, max_db: float = 8.0, threshold_db: float | None = None):
         from scipy.signal import firwin
 
         self.sr, self.max_db = sr, float(max_db)
+        if threshold_db is not None:
+            self.THRESHOLD_DB = float(threshold_db)
         hi = min(11000.0, sr / 2 * 0.92)
         n = int(sr * 0.003) | 1  # ~3 ms, odd: integer group delay
         self.h = firwin(n, [4500.0, hi], pass_zero=False, fs=sr).astype(np.float32)
@@ -271,7 +273,7 @@ class Post:
         self.tail = np.zeros(0, np.float32)
         self.pink = np.zeros(7)
         self.loud_hist: list[np.ndarray] = []
-        self.deesser = DeEsser(sr, float(cfg.get("deess_db", 8.0))) if cfg.get("deess") else None
+        self.deesser = DeEsser(sr, float(cfg.get("deess_db", 8.0)), float(cfg.get("deess_thr", -9.0))) if cfg.get("deess") else None
 
     # --- pieces
     def _compress(self, x: np.ndarray) -> np.ndarray:

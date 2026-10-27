@@ -39,6 +39,7 @@ interface Folder {
   est: { zero_shot: number; train: number };
   read_speed?: number;
   doubtful?: number;
+  deess?: "off" | "light" | "medium" | "strong";
   texts_edited?: boolean;
 }
 interface Clip {
@@ -761,6 +762,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
   const [waiting, setWaiting] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const [speed, setSpeed] = useState(folder?.read_speed ?? 0.9);
+  const [deess, setDeess] = useState(folder?.deess ?? "medium");
   const speedRef = useRef(speed);
   speedRef.current = speed;
   const saveTimer = useRef(0);
@@ -771,6 +773,7 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
 
   useEffect(() => {
     setSpeed(folder?.read_speed ?? 0.9);
+    setDeess(folder?.deess ?? "medium");
     return () => stop();
   }, [folder?.id]);
   // load the voice before the first read (weights + first inference), so it starts within a second
@@ -783,6 +786,11 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
     clearTimeout(saveTimer.current);
     const id = folder?.id;
     saveTimer.current = window.setTimeout(() => id && api(`/v1/simple/folders/${id}`, { method: "PATCH", json: { read_speed: v } }).catch(() => {}), 400);
+  }
+
+  function changeDeess(v: "off" | "light" | "medium" | "strong") {
+    setDeess(v);
+    if (folder) api(`/v1/simple/folders/${folder.id}`, { method: "PATCH", json: { deess: v } }).catch((e) => notify(e.message, "error"));
   }
 
   async function start() {
@@ -935,6 +943,23 @@ function ReadCard({ folder, busy }: { folder: Folder | null; busy: boolean }) {
         <span class="sm-speed-val">{speed.toFixed(2)}×</span>
         {speed !== 0.9 && <button class="small" onClick={() => changeSpeed(0.9)}>默认</button>}
       </label>
+      <div class="sm-speed" title="压低过重的 s、sh 齿音。轻 / 中只压超出这个声线平常齿音水平的部分；强会连正常的齿音也压一些">
+        <span>去齿音</span>
+        <div class="seg">
+          {(
+            [
+              ["off", "关"],
+              ["light", "轻"],
+              ["medium", "中"],
+              ["strong", "强"],
+            ] as const
+          ).map(([k, label]) => (
+            <button class={deess === k ? "on" : ""} onClick={() => changeDeess(k)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       {!ready && folder && <p class="muted">先完成第 3 步克隆，才能用这个声线朗读。</p>}
       {ready && eng?.state !== "ready" && (
         <p class="muted">

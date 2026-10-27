@@ -260,7 +260,12 @@ def start(text: str, voice: str | None = None, language: str | None = None, play
     v = voices.find(voice)
     req = build_request(v, text, language, speed, streaming_mode, emotion)
     tw = voicefx.resolve(v.get("tweak"), preset, tweak)
-    nat = natural.resolve(config.load_settings().get("natural"), naturalness)
+    base = config.load_settings().get("natural") or {}
+    if v.get("folder"):  # simple-mode voices carry their own de-esser setting
+        from . import simple
+
+        base = {**base, **simple.deess_cfg(v["id"])}
+    nat = natural.resolve(base, naturalness)
     if play is None:
         play = bool(config.load_settings()["speech"]["play_locally"])
     job = SpeakJob(voice=v, text=text, request=req, play=play, live=asyncio.Queue() if live else None, tweak=tw, natural=nat)

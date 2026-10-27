@@ -37,6 +37,14 @@ REC_VOICE = "__simple__"  # Recording.voice for hotkey recordings (not a real vo
 SAME_SPEAKER = 0.5  # CAM++ cosine: same person usually 0.6-0.85, different people below 0.4
 CLIP_GAP = 0.3  # seconds of silence between kept ranges inside one saved clip
 TRAIN_BASE = "v2ProPlus"
+# De-esser levels for a folder's voice. "Adaptive" thresholds start at the voice's own normal
+# sibilance (median 4.5-11 kHz share of its sibilant 2 ms blocks), so only s/sh louder than this
+# speaker usually makes them is reduced; "strong" is the fixed -9 dB threshold, which also touches
+# ordinary fricatives and consonant edges (measured: 26-34 % of voiced blocks vs about 4 %).
+DEESS_LEVELS = ("off", "light", "medium", "strong")
+DEESS_DEFAULT = "medium"
+SIB_NORM_FALLBACK = -4.0
+
 # Reading speed for articles: cloned anime/game voices copy their source's fast delivery, and
 # 0.9 brings a typical 6.5-7 chars/s down to a relaxed reading pace.
 READ_SPEED = 0.9
@@ -127,6 +135,7 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "path": str(clip_dir(vid).resolve()),
         "est": {"zero_shot": est_minutes(secs, False), "train": est_minutes(secs, True)},
         "read_speed": data.get("read_speed", READ_SPEED),
+        "deess": data.get("deess", DEESS_DEFAULT),
         "doubtful": _doubtful_count(vid),
     }
 
@@ -160,6 +169,61 @@ def set_read_speed(vid: str, speed: float) -> float:
         data["read_speed"] = round(float(min(1.3, max(0.6, speed))), 2)
         _save_clips(vid, data)
     return data["read_speed"]
+
+
+def set_deess(vid: str, level: str) -> str:
+    if level not in DEESS_LEVELS:
+        raise ValueError(f"去齿音强度只能是 {' / '.join(DEESS_LEVELS)}")
+    with _lock:
+        data = load_clips(vid)
+        data["deess"] = level
+        _save_clips(vid, data)
+    return level
+
+
+def _sib_norm(vid: str) -> float:
+    """The speaker's normal sibilance level (dB), measured once from the folder's sentences."""
+    data = load_clips(vid)
+    if "sib_norm" in data:
+        return float(data["sib_norm"])
+    from . import natural
+
+    rs = []
+    for f in sorted((dataset.ddir(vid) / "clips").glob("*.wav"))[:60]:
+        x, sr = sf.read(str(f), dtype="float32")
+        d = natural.DeEsser(sr, 0.0)
+        buf = np.concatenate([np.zeros(len(d.h) - 1, np.float32), x])
+        band = np.convolve(buf, d.h, mode="valid")
+        dry = buf[len(d.h) - 1 - d.d : len(buf) - d.d]
+        n = len(x) // d.blk
+        eb = np.sqrt(np.mean(band[: n * d.blk].reshape(n, -1) ** 2, 1) + 1e-12)
+        ex = np.sqrt(np.mean(dry[: n * d.blk].reshape(n, -1) ** 2, 1) + 1e-12)
+        r = 20 * np.log10(eb / ex)[ex > 1e-3]
+        rs.append(r[r > -9])
+    sib = np.concatenate(rs) if rs else np.zeros(0)
+    if len(sib) < 50:
+        return SIB_NORM_FALLBACK  # not cloned yet: no sentences to measure
+    norm = round(float(np.median(sib)), 1)
+    with _lock:
+        data = load_clips(vid)
+        data["sib_norm"] = norm
+        _save_clips(vid, data)
+    return norm
+
+
+def deess_cfg(vid: str) -> dict[str, Any]:
+    """Naturalness overrides for synthesis with this folder's voice."""
+    try:
+        level = load_clips(vid).get("deess", DEESS_DEFAULT)
+    except KeyError:
+        return {}
+    if level == "off":
+        return {"deess": False}
+    if level == "strong":
+        return {"deess": True, "deess_db": 8.0, "deess_thr": -9.0}
+    norm = _sib_norm(vid)
+    return {"deess": True, "deess_db": 4.0, "deess_thr": norm + 2.0} if level == "light" else \
+        {"deess": True, "deess_db": 6.0, "deess_thr": norm}
 
 
 def read_speed(vid: str) -> float:
@@ -543,6 +607,10 @@ def _clone(job: CloneJob) -> None:
             _keep_main_speaker(vid)
             job.update(stage="复核转写", progress=0.42)
             _second_opinion(vid)
+            with _lock:
+                d = load_clips(vid)
+                d.pop("sib_norm", None)
+                _save_clips(vid, d)
         # 3. zero-shot reference: the cleanest 3-10 s sentence (kept if the user already set one)
         v = voices.get(vid)
         ref = v.get("ref") if reuse and v.get("ref") else _pick_ref(vid)

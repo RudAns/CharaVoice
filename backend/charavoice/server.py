@@ -1352,6 +1352,7 @@ async def simple_folder(vid: str):
 class FolderPatch(BaseModel):
     name: str | None = None
     read_speed: float | None = Field(default=None, ge=0.6, le=1.3, description="朗读语速")
+    deess: str | None = Field(default=None, description="去齿音强度：off / light / medium / strong")
 
 
 @app.patch("/v1/simple/folders/{vid}", dependencies=[Depends(auth)])
@@ -1359,6 +1360,8 @@ async def simple_patch_folder(vid: str, body: FolderPatch):
     _folder_or_404(vid)
     if body.read_speed is not None:
         simple.set_read_speed(vid, body.read_speed)
+    if body.deess is not None:
+        simple.set_deess(vid, body.deess)
     v = voices.update(vid, {"name": body.name}) if body.name else voices.get(vid)
     return simple.summary(v)
 
