@@ -1549,6 +1549,29 @@ async def simple_set_ref(vid: str, body: RefBody):
     return simple.set_ref_text(vid, body.text or "")
 
 
+@app.post("/v1/simple/folders/{vid}/retrain", dependencies=[Depends(auth)])
+async def simple_retrain(vid: str):
+    """Retrain for less noise (cleaned set, every SoVITS epoch compared); the old model stays selectable."""
+    _folder_or_404(vid)
+    return simple.start_retrain(vid).public()
+
+
+@app.get("/v1/simple/folders/{vid}/models", dependencies=[Depends(auth)])
+async def simple_models(vid: str):
+    _folder_or_404(vid)
+    return simple.models(vid)
+
+
+class ModelBody(BaseModel):
+    id: str
+
+
+@app.post("/v1/simple/folders/{vid}/models/use", dependencies=[Depends(auth)])
+async def simple_use_model(vid: str, body: ModelBody):
+    _folder_or_404(vid)
+    return simple.use_model(vid, body.id)
+
+
 class ExportBody(BaseModel):
     text: str
     format: str = "wav"

@@ -41,6 +41,8 @@ interface Folder {
   doubtful?: number;
   deess?: "off" | "light" | "medium" | "strong";
   mode?: "trained" | "omnivoice";
+  models?: { id: string; label: string; note: string }[];
+  model?: string | null;
   texts_edited?: boolean;
 }
 interface Clip {
@@ -325,6 +327,41 @@ export function Simple() {
   }
 
   // ---------- clone
+  async function retrain() {
+    if (!folder) return;
+    const r = await askConfirm(
+      "减噪重训",
+      <>
+        <p>
+          去掉伴奏特别重的句子、对其余句子轻度降噪，再训练一次；声码器每一轮都保存下来逐轮试听比较，自动选“底噪最少、又不失音色”的那一轮。
+          会占用显卡大约 <strong>5 分钟</strong>，期间朗读暂停，可以随时取消。
+        </p>
+        <p class="muted">现在的模型会保存为“第 1 版”，训完不满意可以一键换回。</p>
+      </>,
+      [
+        { label: "取消", value: "" },
+        { label: "开始重训（约 5 分钟）", kind: "primary", value: "go" },
+      ],
+    );
+    if (r !== "go") return;
+    try {
+      const job = await api<Job>(`/v1/simple/folders/${folder.id}/retrain`, { method: "POST" });
+      setFolders((fs) => fs.map((f) => (f.id === folder.id ? { ...f, job } : f)));
+    } catch (e: any) {
+      notify(e.message, "error");
+    }
+  }
+  async function useModel(id: string) {
+    if (!folder) return;
+    try {
+      await api(`/v1/simple/folders/${folder.id}/models/use`, { method: "POST", json: { id } });
+      notify("已切换模型版本");
+      loadAll();
+    } catch (e: any) {
+      notify(e.message, "error");
+    }
+  }
+
   async function clone() {
     if (!folder) return;
     const secs = folder.seconds;
@@ -561,6 +598,18 @@ export function Simple() {
                 {folder.cloned && ` 上次：${folder.cloned.mode === "trained" ? "训练" : "零样本"}，${mmss(folder.cloned.seconds)} 有效语音。`}
               </p>
               {folder.job?.state === "error" && <p class="error">{folder.job.message}</p>}
+              {(folder.models?.length ?? 0) > 1 && (
+                <div class="sm-speed">
+                  <span>模型版本</span>
+                  <div class="seg">
+                    {folder.models!.map((m) => (
+                      <button class={folder.model === m.id ? "on" : ""} title={m.note} onClick={() => useModel(m.id)}>
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {folder.texts_edited && <p class="sm-warn">转写改过了：点“重新学习”让训练用上修改后的文字（参考文字已经生效）。</p>}
               <div class="btn-row">
                 <button class="primary" disabled={!folder.clips} onClick={clone}>
@@ -569,6 +618,11 @@ export function Simple() {
                 {folder.cloned && (
                   <button onClick={() => setShowTr(true)} title="查看、修改每句的日语转写和参考文字">
                     转写{folder.doubtful ? <span class="sm-doubt-badge">{folder.doubtful} 句可能有误</span> : null}
+                  </button>
+                )}
+                {folder.trained && (
+                  <button onClick={retrain} title="去掉伴奏重的句子再训练一次，声码器少训几轮，减少底噪和机械的齿音">
+                    减噪重训
                   </button>
                 )}
                 <label class="check slim" title="录到的声音里有背景音乐、音效时保持打开">

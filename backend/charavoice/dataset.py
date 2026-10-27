@@ -581,13 +581,19 @@ def clear(vid: str) -> None:
     bus.publish("dataset_changed", voice=vid)
 
 
-def export(vid: str) -> dict[str, Any]:
-    """Write GPT-SoVITS training list: <wav path>|<speaker>|<LANG>|<text>."""
+def export(vid: str, clean: bool = False) -> dict[str, Any]:
+    """Write GPT-SoVITS training list: <wav path>|<speaker>|<LANG>|<text>.
+    clean=True uses the cleaned copies under dataset/clean/ (see simple.build_clean_set) and only
+    the sentences listed there."""
     data = load(vid)
     clips = ddir(vid) / "clips"
+    keep = None
+    if clean:
+        clips = ddir(vid) / "clean"
+        keep = set(json.loads((clips / "manifest.json").read_text(encoding="utf-8"))["ids"])
     lines = []
     for i in data["items"]:
-        if i.get("deleted") or not i.get("text"):
+        if i.get("deleted") or not i.get("text") or (keep is not None and i["id"] not in keep):
             continue
         text = i["text"].replace("|", " ").replace("\n", " ").strip()
         lines.append(f"{(clips / (i['id'] + '.wav')).resolve()}|{vid}|{i['lang'].upper()}|{text}")
@@ -596,6 +602,8 @@ def export(vid: str) -> dict[str, Any]:
     out = ddir(vid) / "train.list"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     s = summary(vid, data)
+    if keep is not None:
+        s["seconds"] = round(sum(i["duration"] for i in data["items"] if i["id"] in keep and not i.get("deleted") and i.get("text")), 1)
     return {"path": str(out.relative_to(config.ROOT)).replace("\\", "/"), "lines": len(lines), "seconds": s["seconds"], "level": s["level"]}
 
 

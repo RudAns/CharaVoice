@@ -145,6 +145,8 @@ def summary(v: dict[str, Any]) -> dict[str, Any]:
         "read_speed": data.get("read_speed", READ_SPEED),
         "deess": data.get("deess", DEESS_DEFAULT),
         "mode": data.get("mode", "trained"),
+        "models": [{k: m[k] for k in ("id", "label", "note")} for m in data.get("models", [])],
+        "model": data.get("model"),
         "doubtful": _doubtful_count(vid),
     }
 
@@ -965,6 +967,289 @@ def _tag_ref(vid: str, item_id: str) -> None:
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(v, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(p)
+
+
+# ------------------------------------------------------------------ cleaner training set
+CLEAN_MAX_BGM_DB = -10.0  # drop sentences whose accompaniment was this loud before separation
+
+
+def _wiener(x: np.ndarray, sr: int, max_cut_db: float = 10.0) -> np.ndarray:
+    """Gentle stationary-noise reduction: Wiener gain from a noise profile taken from the quietest
+    frames, limited to max_cut_db so breaths and fricatives (well above the floor) pass untouched."""
+    from scipy.signal import istft, stft
+
+    f, t, Z = stft(x, sr, nperseg=1024, noverlap=768)
+    P = np.abs(Z) ** 2
+    e = P.sum(0)
+    q = e <= np.percentile(e, 10)
+    noise = P[:, q].mean(1, keepdims=True) + 1e-14
+    snr = np.maximum(P / noise - 1.0, 0.0)
+    g = np.maximum(snr / (snr + 1.0), 10 ** (-max_cut_db / 20))
+    _, y = istft(Z * g, sr, nperseg=1024, noverlap=768)
+    return np.asarray(y[: len(x)], np.float32)
+
+
+def build_clean_set(vid: str) -> dict[str, Any]:
+    """A cleaner copy of the folder's sentences for training (dataset/clean/, originals untouched):
+    sentences that had heavy accompaniment before separation are left out, and the rest get a
+    gentle noise reduction where their floor is not already far below the voice."""
+    from scipy.signal import stft
+
+    out = dataset.ddir(vid) / "clean"
+    out.mkdir(parents=True, exist_ok=True)
+    keep, dropped, denoised = [], [], 0
+    for i in dataset.load(vid)["items"]:
+        if i.get("deleted") or not i.get("text"):
+            continue
+        if i["quality"].get("bgm_db", -99) > CLEAN_MAX_BGM_DB:
+            dropped.append(i["id"])
+            continue
+        x, sr = sf.read(str(dataset.ddir(vid) / "clips" / f"{i['id']}.wav"), dtype="float32")
+        _, _, Z = stft(x, sr, nperseg=1024, noverlap=768)
+        db = 10 * np.log10((np.abs(Z) ** 2).sum(0) + 1e-12)
+        if np.percentile(db, 10) - np.percentile(db, 95) > -50:  # audible floor: clean it
+            x = _wiener(x, sr)
+            denoised += 1
+        sf.write(str(out / f"{i['id']}.wav"), np.clip(x, -1, 1), sr, subtype="PCM_16")
+        keep.append(i["id"])
+    secs = round(sum(i["duration"] for i in dataset.load(vid)["items"] if i["id"] in set(keep)), 1)
+    info = {"ids": keep, "dropped": dropped, "denoised": denoised, "seconds": secs, "max_bgm_db": CLEAN_MAX_BGM_DB}
+    (out / "manifest.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    return info
+
+
+# ------------------------------------------------------------------ model versions
+def _weights_dir(vid: str) -> Path:
+    return voices.folder(vid) / "weights"
+
+
+def models(vid: str) -> dict[str, Any]:
+    data = load_clips(vid)
+    return {"models": data.get("models", []), "active": data.get("model")}
+
+
+def archive_current(vid: str, label: str, note: str = "") -> dict[str, Any] | None:
+    """Move the voice's current fine-tuned weights into weights/versions/<id>/ (the training run
+    that follows only cleans up its own output folders) and list them as a selectable version."""
+    import shutil
+
+    v = voices.get(vid)
+    w = v.get("weights") or {}
+    if not (w.get("gpt") and w.get("sovits")):
+        return None
+    with _lock:
+        data = load_clips(vid)
+        ms = data.setdefault("models", [])
+        known = next((m for m in ms if m["gpt"] == w["gpt"] and m["sovits"] == w["sovits"]), None)
+        if known:
+            return known
+        mid = f"v{len(ms) + 1}"
+        dst = _weights_dir(vid) / "versions" / mid
+        dst.mkdir(parents=True, exist_ok=True)
+        rel = {}
+        for k in ("gpt", "sovits"):
+            src = voices.folder(vid) / w[k]
+            shutil.move(str(src), str(dst / src.name))
+            rel[k] = f"weights/versions/{mid}/{src.name}"
+        m = {"id": mid, "label": label, "note": note, "gpt": rel["gpt"], "sovits": rel["sovits"],
+             "base": v.get("base"), "at": w.get("trained_at") or voices.now_iso()}
+        ms.append(m)
+        data["model"] = mid
+        _save_clips(vid, data)
+    voices.set_weights(vid, m["gpt"], m["sovits"])
+    return m
+
+
+def use_model(vid: str, mid: str) -> dict[str, Any]:
+    data = load_clips(vid)
+    m = next((m for m in data.get("models", []) if m["id"] == mid), None)
+    if not m:
+        raise KeyError(mid)
+    voices.set_weights(vid, m["gpt"], m["sovits"])
+    if m.get("base"):
+        voices.update(vid, {"base": m["base"]})
+    with _lock:
+        data = load_clips(vid)
+        data["model"] = mid
+        _save_clips(vid, data)
+    return m
+
+
+# ------------------------------------------------------------------ retrain for less noise
+RETRAIN_S2_EPOCHS = 8   # every epoch is kept and measured; the previous run used 10
+COMPARE = {"sib": "静かな森の中で、少女はそっと空を見上げました。", "plain": "すみません、新しい小説はどこで探せますか。"}
+
+
+def _fricative_flatness(x: np.ndarray, sr: int) -> float:
+    from scipy.signal import stft
+
+    f, t, Z = stft(x, sr, nperseg=1024, noverlap=768)
+    P = np.abs(Z) ** 2
+    tot = P.sum(0) + 1e-12
+    band = P[(f >= 4000) & (f <= 11000)]
+    db = 10 * np.log10(tot)
+    sel = (band.sum(0) / tot > 0.5) & (db > np.percentile(db, 30))
+    if sel.sum() < 3:
+        return float("nan")
+    hb = band[:, sel] + 1e-12
+    return float(np.mean(np.exp(np.mean(np.log(hb), 0)) / np.mean(hb, 0)))
+
+
+def _hiss_db(x: np.ndarray, sr: int) -> float:
+    """Energy above 11 kHz in voiced, non-fricative frames relative to the frame (dB): the
+    noise that rides on the voice."""
+    from scipy.signal import stft
+
+    f, t, Z = stft(x, sr, nperseg=1024, noverlap=768)
+    P = np.abs(Z) ** 2
+    tot = P.sum(0) + 1e-12
+    db = 10 * np.log10(tot)
+    voiced = (db > np.percentile(db, 95) - 20) & (P[(f >= 4000) & (f <= 11000)].sum(0) / tot < 0.2)
+    if voiced.sum() < 3:
+        return float("nan")
+    return float(10 * np.log10(P[f >= 11000][:, voiced].sum() / P[:, voiced].sum() + 1e-12))
+
+
+async def _render(vid: str, text: str, gpt: str, sovits: str) -> tuple[np.ndarray, int]:
+    from dataclasses import replace
+
+    from . import speech
+    from .engine import engine
+
+    v = voices.get(vid)
+    req = speech.build_request(v, text, LANG, 1.0, 0)
+    req = replace(req, gpt_weights=str((voices.folder(vid) / gpt).resolve()),
+                  sovits_weights=str((voices.folder(vid) / sovits).resolve()), seed=20261027)
+    chunks, sr = [], 32000
+    async for sr, pcm in engine.synthesize(req, presence=False):
+        chunks.append(pcm)
+    return np.concatenate(chunks).astype(np.float32) / 32768.0, sr
+
+
+async def compare_models(vid: str, entries: list[dict[str, str]], out_dir: Path) -> list[dict[str, Any]]:
+    """Render the comparison sentences with each (gpt, sovits) pair (fixed seed) and measure
+    fricative flatness, hiss on the voice and similarity to the folder's speaker."""
+    d = dataset.load(vid)
+    E = np.array([i["embedding"] for i in d["items"] if not i.get("deleted") and i.get("embedding")], np.float32)
+    centre = E.mean(0)
+    centre /= np.linalg.norm(centre) + 1e-9
+    out_dir.mkdir(parents=True, exist_ok=True)
+    res = []
+    for e in entries:
+        fl, hs, sim = [], [], []
+        for key, text in COMPARE.items():
+            x, sr = await _render(vid, text, e["gpt"], e["sovits"])
+            sf.write(str(out_dir / f"{key}_{e['name']}.wav"), x, sr, subtype="PCM_16")
+            fl.append(_fricative_flatness(x, sr))
+            hs.append(_hiss_db(x, sr))
+            emb = _embed(audio_util.decode(out_dir / f"{key}_{e['name']}.wav", 16000))
+            sim.append(float(emb @ centre) if emb is not None else float("nan"))
+        res.append({**e, "flatness": round(float(np.nanmean(fl)), 3), "hiss_db": round(float(np.nanmean(hs)), 1),
+                    "similarity": round(float(np.nanmean(sim)), 3)})
+    return res
+
+
+def start_retrain(vid: str) -> "CloneJob":
+    """Retrain the folder's voice for less noise: archive the current model as a version, train on
+    the cleaned set keeping every SoVITS epoch, then render and measure each epoch against the
+    previous model and switch to the best balance of noise and likeness (all stay selectable)."""
+    voices.get(vid)
+    with _lock:
+        j = jobs.get(vid)
+        if j and j.state == "running":
+            raise ValueError("这个文件夹正在学习。")
+        if not dataset.load(vid)["items"]:
+            raise ValueError("文件夹还没有整理好的句子，请先点“克隆这个声线”。")
+        job = CloneJob(voice=vid, train=True, separate=False)
+        job.phase = "train"
+        jobs[vid] = job
+    threading.Thread(target=_retrain, args=(job,), daemon=True, name=f"retrain-{vid}").start()
+    return job
+
+
+def _retrain(job: "CloneJob") -> None:
+    import asyncio
+    import shutil
+
+    vid = job.voice
+    loop = bus._loop
+
+    def on_loop(coro):
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=900)
+
+    try:
+        prev = archive_current(vid, "第 1 版", "原训练（声码器 10 轮）")
+        job.update(stage="整理干净的训练集", progress=0.02)
+        clean = build_clean_set(vid)
+        if clean["seconds"] < dataset.MIN_TOTAL:
+            raise RuntimeError(f"剔除伴奏重的句子后只剩 {clean['seconds']:.0f} 秒，不够训练（至少 60 秒）。")
+        job.update(stage=f"训练（干净素材 {clean['seconds']:.0f} 秒，声码器 {RETRAIN_S2_EPOCHS} 轮）", progress=0.05)
+        try:
+            training.start(vid, {"base": TRAIN_BASE, "fresh": True, "clean": True, "keep_s2": True,
+                                 "s2_epochs": RETRAIN_S2_EPOCHS})
+        except ValueError as e:
+            raise RuntimeError(str(e)) from e
+        while True:
+            time.sleep(1.0)
+            tj = training.jobs.get(vid)
+            if job.cancel:
+                training.cancel(vid)
+            if tj is None:
+                break
+            job.update(stage=f"训练 · {tj.stage_label}", progress=round(0.05 + 0.75 * tj.progress, 3))
+            if tj.status != "running":
+                break
+        tj = training.jobs.get(vid)
+        if not tj or tj.status != "done":
+            if prev:
+                use_model(vid, prev["id"])
+            if job.cancel or (tj and tj.status == "cancelled"):
+                raise _Cancelled()
+            raise RuntimeError("训练失败：" + (tj.message if tj else "未知错误") + "（已换回第 1 版）")
+        # move the new run (final + per-epoch SoVITS) into versions/<id>/
+        v = voices.get(vid)
+        w = v["weights"]
+        with _lock:
+            data = load_clips(vid)
+            mid = f"v{len(data.get('models', [])) + 1}"
+        dst = _weights_dir(vid) / "versions" / mid
+        dst.mkdir(parents=True, exist_ok=True)
+        gpt = dst / Path(w["gpt"]).name
+        shutil.move(str(voices.folder(vid) / w["gpt"]), str(gpt))
+        sovits_all = sorted((_weights_dir(vid) / "sovits" / "epochs").glob("*.pth")) + [voices.folder(vid) / w["sovits"]]
+        for f in sovits_all:
+            shutil.move(str(f), str(dst / f.name))
+        shutil.rmtree(_weights_dir(vid) / "sovits" / "epochs", ignore_errors=True)
+        rel = lambda f: str(Path(f).resolve().relative_to(voices.folder(vid).resolve())).replace("\\", "/")
+        entries = []
+        if prev:
+            entries.append({"name": "v1", "gpt": prev["gpt"], "sovits": prev["sovits"]})
+        for f in sorted(dst.glob("*.pth"), key=lambda f: int(re.search(r"_e(\d+)_", f.name).group(1))):
+            ep = int(re.search(r"_e(\d+)_", f.name).group(1))
+            entries.append({"name": f"{mid}-e{ep}", "gpt": rel(gpt), "sovits": rel(f), "epoch": ep})
+        job.update(stage=f"逐轮试听比较（{len(entries)} 个模型）", progress=0.82)
+        res = on_loop(compare_models(vid, entries, voices.folder(vid) / "train" / "compare"))
+        # pick: the least hissy epoch that keeps at least 97 % of the previous model's likeness
+        base_sim = res[0]["similarity"] if prev else max(r["similarity"] for r in res)
+        cands = [r for r in res if r.get("epoch") and r["similarity"] >= 0.97 * base_sim] or [r for r in res if r.get("epoch")]
+        best = min(cands, key=lambda r: (r["flatness"], -r["similarity"]))
+        with _lock:
+            data = load_clips(vid)
+            data.setdefault("models", []).append({
+                "id": mid, "label": f"第 {len(data['models']) + 1} 版", "note": f"干净素材 {clean['seconds']:.0f} 秒，声码器第 {best['epoch']} 轮",
+                "gpt": best["gpt"], "sovits": best["sovits"], "base": TRAIN_BASE, "at": voices.now_iso(),
+                "epochs": [{k: r[k] for k in ("epoch", "sovits", "flatness", "hiss_db", "similarity")} for r in res if r.get("epoch")],
+            })
+            data["retrain_report"] = {"clean": clean, "results": res, "picked": best["name"]}
+            _save_clips(vid, data)
+        use_model(vid, mid)
+        job.update(state="done", phase="done", mode="trained", progress=1.0, stage="完成",
+                   message=f"已切到第 2 版（声码器第 {best['epoch']} 轮）。不满意可以在“模型版本”里换回第 1 版。")
+    except _Cancelled:
+        job.update(state="cancelled", stage="已取消", message="已取消。")
+    except Exception as e:
+        log.exception("retrain failed")
+        job.update(state="error", stage="出错", message=str(e))
 
 
 # ------------------------------------------------------------------ export a whole article

@@ -277,7 +277,7 @@ def _run(job: TrainJob) -> None:
         _stage(job, "check")
         exp = exp_dir(vid)
         exp.mkdir(parents=True, exist_ok=True)
-        ex = dataset.export(vid)
+        ex = dataset.export(vid, clean=bool(job.params.get("clean")))
         _log(vid, f"训练列表：{ex['lines']} 段，{ex['seconds']:.0f} 秒")
         from .engine import ENGINES
 
@@ -472,8 +472,16 @@ def _train_s2(job: TrainJob, version: str, exp: Path) -> Path:
     files = sorted(out.glob(f"{vid}_e*_s*.pth"), key=lambda f: f.stat().st_mtime)
     if not files:
         raise RuntimeError("SoVITS 训练结束但没有导出权重")
-    for f in files[:-1]:
-        f.unlink(missing_ok=True)
+    if p.get("keep_s2"):
+        # keep one file per epoch: fewer epochs learn less of the material's leftover noise, so the
+        # caller can compare them and pick (see simple.retrain)
+        keep = out / "epochs"
+        keep.mkdir(exist_ok=True)
+        for f in files[:-1]:
+            f.replace(keep / f.name)
+    else:
+        for f in files[:-1]:
+            f.unlink(missing_ok=True)
     return files[-1]
 
 
