@@ -5,16 +5,20 @@
 //! or launch one: in development straight from the Python sources
 //! (`.venv` + `python -m charavoice serve`), in a packaged build as the frozen
 //! `resources/backend/charavoice-backend.exe`, with user data (models, engines,
-//! voices) in %LOCALAPPDATA%\<identifier>. The child is spawned in its own job object
-//! (`set_process_group`), so closing the window tears down the backend and the
-//! inference engine it started.
+//! voices) in %LOCALAPPDATA%\<identifier>. The backend watches this process: when the app
+//! quits it exits too, unless an agent used it recently (then its idle rules end it later).
+//!
+//! Closing the window hides it to the tray (the window asks the first time); the hotkeys keep
+//! working. "Quit" in the tray menu ends the app. Starting CharaVoice again shows the window.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, RunEvent};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -375,15 +379,11 @@ fn home_path() -> String {
     home_dir().canonicalize().unwrap_or_else(|_| home_dir()).display().to_string()
 }
 
-fn kill_backend(app: &AppHandle) {
-    if let Some(child) = app.state::<Backend>().child.lock().unwrap().take() {
-        let _ = child.kill();
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // a second start (start.bat, the shortcut) only brings the running window to the front
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app.clone())))
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -412,6 +412,7 @@ pub fn run() {
         .setup(|app| {
             // Another program may already own a combination; take the first one that is free.
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            build_tray(app.handle())?;
             for key in DICTATION_HOTKEYS {
                 if app.global_shortcut().register(*key).is_ok() {
                     *app.state::<Hotkey>().0.lock().unwrap() = key.to_string();
@@ -437,16 +438,53 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|w, e| {
+            // the hidden hotkey windows would keep the app alive with no visible window
+            if w.label() == "main" && matches!(e, tauri::WindowEvent::Destroyed) {
+                w.app_handle().exit(0);
+            }
             if w.label() == "companion" && matches!(e, tauri::WindowEvent::Destroyed) {
                 let _ = w.app_handle().emit("companion", false);
             }
         })
         .invoke_handler(tauri::generate_handler![backend_info, backend_log, restart_backend, home_path, toggle_companion, dictation_hotkey, record_hotkey, show_main, tool_paths, set_backend_paused, ptt_hotkey])
-        .build(tauri::generate_context!())
-        .expect("error while building CharaVoice")
-        .run(|app, event| {
-            if let RunEvent::Exit = event {
-                kill_backend(app);
+        .run(tauri::generate_context!())
+        .expect("error while running CharaVoice");
+}
+
+/// Tray icon: click to show the window; menu to open, free the GPU, stop the background
+/// service or quit. The two service actions run in the window, which holds the backend token.
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = Menu::with_items(
+        app,
+        &[
+            &MenuItem::with_id(app, "open", "打开 CharaVoice", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "unload", "释放显存", true, None::<&str>)?,
+            &MenuItem::with_id(app, "stop", "停止后台服务", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?,
+        ],
+    )?;
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("CharaVoice")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, e| match e.id().as_ref() {
+            "open" => show_main(app.clone()),
+            "unload" | "stop" => {
+                let _ = app.emit_to("main", "tray-action", e.id().as_ref());
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, e| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                show_main(tray.app_handle().clone());
             }
         });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
 }

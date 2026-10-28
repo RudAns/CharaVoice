@@ -1,6 +1,9 @@
 # ===== CharaVoice =====
 # Large or machine-local content never goes into git.
 /.venv/
+/venv/
+/env/
+.venv*/
 /engines/
 /models/
 /data/

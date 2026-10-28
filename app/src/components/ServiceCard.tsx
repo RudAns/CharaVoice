@@ -16,6 +16,18 @@ interface Service {
   gpu: { name?: string; used_mb?: number; total_mb?: number };
 }
 
+export async function unloadService() {
+  await api("/v1/service/unload", { method: "POST" }).catch((e) => notify(e.message, "error"));
+  notify("已卸载模型，显存已释放；下次说话时会自动重新加载");
+}
+
+// the window stops reconnecting too, so the hidden windows do not start the backend again
+export async function stopService() {
+  serviceStopped.value = true;
+  await invoke("set_backend_paused", { paused: true }).catch(() => {});
+  await api("/v1/service/stop", { method: "POST" }).catch(() => {});
+}
+
 const mins = (s: number) => (s < 60 ? `${s} 秒` : s < 3600 ? `${Math.floor(s / 60)} 分钟` : `${(s / 3600).toFixed(1)} 小时`);
 
 export function ServiceCard({ editable = false }: { editable?: boolean }) {
@@ -29,15 +41,10 @@ export function ServiceCard({ editable = false }: { editable?: boolean }) {
   if (!s) return null;
   const loaded = s.engines.filter((e) => e.state === "ready" || e.state === "starting");
   async function unload() {
-    await api("/v1/service/unload", { method: "POST" }).catch((e) => notify(e.message, "error"));
-    notify("已卸载模型，显存已释放；下次说话时会自动重新加载");
+    await unloadService();
     load();
   }
-  async function stop() {
-    serviceStopped.value = true;
-    await invoke("set_backend_paused", { paused: true }).catch(() => {});
-    await api("/v1/service/stop", { method: "POST" }).catch(() => {});
-  }
+  const stop = stopService;
   async function save(patch: Record<string, number>) {
     await api("/v1/settings", { method: "PATCH", json: { idle: patch } }).catch((e) => notify(e.message, "error"));
     load();

@@ -48,7 +48,9 @@ def cmd_serve(a) -> int:
     server.RUNTIME.update(config.write_runtime(port, os.getpid()))
     server.RUNTIME["agent_token"] = config.agent_token()
     if a.parent_pid:
-        procutil.watch_parent(a.parent_pid, lambda: os._exit(0))
+        from . import idle
+
+        procutil.watch_parent(a.parent_pid, idle.on_app_exit)
     _out("CHARAVOICE_READY " + json.dumps({"base_url": server.RUNTIME["base_url"], "pid": os.getpid()}))
     uvicorn.run(server.app, host="127.0.0.1", port=port, log_level="warning", ws_ping_interval=20)
     return 0

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "preact/hooks";
 import { conn, connError, connect, engine, onEvent, serviceStopped } from "./api";
+import { CloseGuard } from "./components/CloseGuard";
 import { Ring } from "./components/Ring";
 import { Integration } from "./pages/Integration";
 import { Mcp } from "./pages/Mcp";
@@ -92,6 +93,7 @@ export default function App() {
         ) : (
           <p class={connError.value ? "error" : "muted"}>{connError.value || "正在启动本地服务…"}</p>
         )}
+        <CloseGuard />
       </div>
     );
   }
@@ -99,6 +101,7 @@ export default function App() {
   const eng = engine.value;
   return (
     <div class="app">
+      <CloseGuard />
       <nav class="side">
         <div class="brand">
           <span class="brand-mark" />

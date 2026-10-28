@@ -51,6 +51,9 @@ def touch(name: str | None, via: str) -> dict[str, Any] | None:
     name = clean(name)
     if not name:
         return None
+    from . import idle
+
+    idle.agent_touch()
     with _lock:
         data = _load()
         a = data.setdefault(name, {"voice": None, "emotion": None, "first_seen": time.time(), "calls": 0})

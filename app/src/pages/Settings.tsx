@@ -3,6 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api, engine } from "../api";
 import { notify, setShowAdvanced, showAdvanced } from "../store";
 import { ServiceCard } from "../components/ServiceCard";
+import { closeAction, setCloseAction, type CloseAction } from "../components/CloseGuard";
 
 interface Device {
   index: number;
@@ -19,6 +20,7 @@ export function Settings() {
   const [devs, setDevs] = useState<Device[]>([]);
   const [logs, setLogs] = useState<string[] | null>(null);
   const [hotkey, setHotkey] = useState<string | null>(null);
+  const [onClose, setOnClose] = useState<CloseAction>(closeAction());
 
   useEffect(() => {
     api("/v1/settings").then(setS);
@@ -48,6 +50,17 @@ export function Settings() {
           显示高级功能
         </label>
         <p class="muted small-note">舞台、声音库、情绪参考、声线调节、自然度、模型管理等更细的功能。平时只用素材库、训练和接入 Agent 就够了。</p>
+      </div>
+      <div class="card">
+        <label class="field narrow">
+          <span>关闭窗口时</span>
+          <select value={onClose} onChange={(e) => { const v = (e.target as HTMLSelectElement).value as CloseAction; setCloseAction(v); setOnClose(v); }}>
+            <option value="ask">每次询问</option>
+            <option value="tray">缩到托盘（快捷键和 Agent 继续可用）</option>
+            <option value="exit">退出程序</option>
+          </select>
+        </label>
+        <p class="muted small-note">缩到托盘后，点任务栏右下角的 CharaVoice 图标重新打开；右键图标可以释放显存、停止后台服务或退出。</p>
       </div>
       <h3>后台服务与显存</h3>
       <ServiceCard editable />

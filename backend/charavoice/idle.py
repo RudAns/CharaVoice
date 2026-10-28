@@ -23,6 +23,7 @@ _last = time.monotonic()
 ui_clients = 0  # open /v1/events connections (app windows)
 started = time.time()
 unloaded_at: float | None = None
+last_agent: float | None = None  # last call from a named agent (MCP, CLI, HTTP with an agent name)
 
 
 def touch() -> None:
@@ -30,6 +31,26 @@ def touch() -> None:
     global _last, unloaded_at
     _last = time.monotonic()
     unloaded_at = None
+
+
+def agent_touch() -> None:
+    global last_agent
+    last_agent = time.monotonic()
+
+
+def on_app_exit() -> None:
+    """The app that started this backend has gone (closed or crashed). If an agent used the voice
+    recently, keep serving it and let the idle rules end the backend later; otherwise exit now."""
+    exit_after = float(config.load_settings().get("idle", {}).get("exit_minutes", 60)) * 60
+    if last_agent is not None and (exit_after <= 0 or time.monotonic() - last_agent < exit_after):
+        log.info("app closed; an agent used the voice %.0f s ago, staying in the background", time.monotonic() - last_agent)
+        null = os.open(os.devnull, os.O_WRONLY)  # the app's stdout/stderr pipes are closed now
+        os.dup2(null, 1)
+        os.dup2(null, 2)
+        return
+    log.info("app closed: exiting")
+    config.clear_runtime(os.getpid())
+    os._exit(0)
 
 
 def idle_seconds() -> float:
