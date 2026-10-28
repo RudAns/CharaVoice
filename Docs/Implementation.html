@@ -3,211 +3,342 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>CharaVoice 技术实现说明</title>
+<title>CharaVoice 技术实现</title>
 <style>
-  :root { --bg: #fbfbfd; --fg: #1d2330; --muted: #5d6576; --line: #e2e5ec; --accent: #6d5ce7; --code: #f2f3f7; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #11141b; --fg: #e3e7f0; --muted: #98a1b3; --line: #2a3040; --accent: #a99cff; --code: #1a1f2b; } }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.7 "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif; }
-  main { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
-  h1 { font-size: 28px; margin: 0 0 6px; } h2 { font-size: 20px; margin: 40px 0 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-  h3 { font-size: 16px; margin: 22px 0 6px; }
-  p, li { color: var(--fg); } .muted { color: var(--muted); }
+  :root { --bg: #fbfbfd; --fg: #1d2330; --muted: #5d6576; --line: #e2e5ec; --accent: #6d5ce7; --accent2: #d0488f; --code: #f2f3f7; --fill: #f3f1ff; --ok: #1f9d6b; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #11141b; --fg: #e3e7f0; --muted: #98a1b3; --line: #2a3040; --accent: #a99cff; --accent2: #f08cc0; --code: #1a1f2b; --fill: #1d1b33; --ok: #4fd1a1; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15.5px/1.75 "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 24px 80px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
+  nav.toc { position: sticky; top: 24px; align-self: start; font-size: 13.5px; line-height: 1.6; }
+  nav.toc b { display: block; margin-bottom: 8px; color: var(--muted); font-weight: 600; }
+  nav.toc a { display: block; color: var(--muted); text-decoration: none; padding: 3px 0 3px 10px; border-left: 2px solid var(--line); }
+  nav.toc a:hover { color: var(--accent); border-left-color: var(--accent); }
+  main { min-width: 0; }
+  main > p, main > ul, main > ol, main > .note, main > h2, main > h3 { max-width: 720px; }
+  h1 { font-size: 30px; margin: 0 0 6px; line-height: 1.3; }
+  h2 { font-size: 21px; margin: 48px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+  h3 { font-size: 16.5px; margin: 26px 0 6px; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
   code, pre { font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; background: var(--code); border-radius: 6px; }
   code { padding: 1px 5px; } pre { padding: 12px 14px; overflow: auto; }
-  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; }
-  svg { display: block; width: 100%; height: auto; margin: 14px 0; }
-  .box { fill: none; stroke: var(--accent); stroke-width: 1.5; } .lbl { fill: var(--fg); font-size: 13px; } .sub { fill: var(--muted); font-size: 11.5px; }
-  .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#a); }
-  .note { border-left: 3px solid var(--accent); padding: 6px 14px; background: var(--code); border-radius: 0 8px 8px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td:first-child { white-space: nowrap; }
+  figure { margin: 16px 0 20px; }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+  .box { fill: var(--bg); stroke: var(--accent); stroke-width: 1.5; }
+  .box2 { fill: var(--fill); stroke: var(--accent); stroke-width: 1.5; }
+  .boxm { fill: var(--bg); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 3; }
+  .lbl { fill: var(--fg); font-size: 14px; font-weight: 600; }
+  .sub { fill: var(--muted); font-size: 12px; }
+  .acc { fill: var(--accent2); font-size: 12px; font-weight: 600; }
+  .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  .arrowa { stroke: var(--accent2); stroke-width: 1.6; fill: none; marker-end: url(#arr2); }
+  .note { border-left: 3px solid var(--accent); padding: 8px 14px; background: var(--code); border-radius: 0 8px 8px 0; margin: 14px 0; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; gap: 0; padding: 24px 16px 60px; } nav.toc { position: static; margin-bottom: 20px; } }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--muted)"/></marker>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent2)"/></marker>
+  </defs>
+</svg>
+<div class="wrap">
+<nav class="toc" aria-label="目录">
+  <b>目录</b>
+  <a href="#arch">1. 整体结构</a>
+  <a href="#life">2. 后台服务的生命周期</a>
+  <a href="#library">3. 素材库：录制与截取</a>
+  <a href="#clone">4. 克隆流水线</a>
+  <a href="#review">5. 转写校对</a>
+  <a href="#train">6. 训练与逐轮选优</a>
+  <a href="#read">7. 朗读与去齿音</a>
+  <a href="#lang">8. 语种判断</a>
+  <a href="#ptt">9. 按住说话</a>
+  <a href="#mcp">10. MCP 与其他接口</a>
+  <a href="#build">11. 安装包</a>
+  <a href="#issues">12. 踩过的问题</a>
+  <a href="#use">13. 接入自己的项目</a>
+</nav>
 <main>
-<h1>CharaVoice 技术实现说明</h1>
-<p class="muted">本地角色声音服务：GPT-SoVITS / OmniVoice 合成与微调、sherpa-onnx 听写、声线调节与自然度后处理、素材流水线、Tauri 界面、Agent 接口与安装包。本文只讲接入和复现所需的要点。</p>
+<h1>CharaVoice 技术实现</h1>
+<p class="muted">CharaVoice 是一个 Windows 本地软件：整理某个人的声音素材，用 GPT-SoVITS 学习声线，再通过 MCP、HTTP 和命令行让 Agent 用这个声音说话、听用户说话。本文讲清楚各部分怎么实现、有哪些要注意的地方，方便复现或接入自己的项目。</p>
 
-<h2>1. 整体结构</h2>
-<svg viewBox="0 0 820 300" role="img" aria-label="进程结构">
-  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" style="color:var(--muted)"/></marker></defs>
-  <rect class="box" x="10" y="20" width="200" height="110" rx="10"/>
-  <text class="lbl" x="24" y="46">Agent / 客户端</text>
-  <text class="sub" x="24" y="70">Claude Code（MCP stdio）</text>
-  <text class="sub" x="24" y="90">charavoice 命令行</text>
-  <text class="sub" x="24" y="110">任意 HTTP / OpenAI SDK</text>
-  <rect class="box" x="10" y="170" width="200" height="110" rx="10"/>
-  <text class="lbl" x="24" y="196">Tauri 窗口（Rust + WebView2）</text>
-  <text class="sub" x="24" y="220">启动/回收后端子进程</text>
-  <text class="sub" x="24" y="240">UI：圆环、能量球、素材、训练</text>
-  <text class="sub" x="24" y="260">WS /v1/events 收状态与音量</text>
-  <rect class="box" x="300" y="60" width="230" height="180" rx="10"/>
-  <text class="lbl" x="314" y="86">Python 后端（FastAPI，127.0.0.1:9870）</text>
-  <text class="sub" x="314" y="110">口令鉴权（data/runtime.json）</text>
-  <text class="sub" x="314" y="130">播放队列 + 实时电平</text>
-  <text class="sub" x="314" y="150">听写：Silero VAD + SenseVoice（CPU）</text>
-  <text class="sub" x="314" y="170">素材流水线 / 训练管理</text>
-  <text class="sub" x="314" y="190">回环录音（WASAPI）</text>
-  <text class="sub" x="314" y="210">AudioSeal 水印（CPU）</text>
-  <rect class="box" x="610" y="60" width="200" height="180" rx="10"/>
-  <text class="lbl" x="624" y="86">GPT-SoVITS 整合包</text>
-  <text class="sub" x="624" y="110">自带 Python 运行时</text>
-  <text class="sub" x="624" y="130">api_v2.py（推理，:9880）</text>
-  <text class="sub" x="624" y="150">UVR5 BS-Roformer（分离）</text>
-  <text class="sub" x="624" y="170">prepare_datasets/*.py</text>
-  <text class="sub" x="624" y="190">s2_train.py / s1_train.py</text>
-  <path class="arrow" d="M210 75 H300"/><path class="arrow" d="M210 225 H260 V180 H300"/>
-  <path class="arrow" d="M530 150 H610"/>
-  <text class="sub" x="540" y="140">子进程 + HTTP</text>
+<h2 id="arch">1. 整体结构</h2>
+<figure>
+<svg viewBox="0 0 900 360" role="img" aria-label="进程结构：Agent 和桌面外壳都通过本机 HTTP 连接同一个 Python 后台，后台再管理两个语音引擎子进程">
+  <rect class="box" x="10" y="20" width="220" height="130" rx="10"/>
+  <text class="lbl" x="26" y="48">Agent / 客户端</text>
+  <text class="sub" x="26" y="74">Claude Code、Cursor（MCP stdio）</text>
+  <text class="sub" x="26" y="96">MCP Streamable HTTP（/mcp）</text>
+  <text class="sub" x="26" y="118">charavoice 命令行</text>
+  <text class="sub" x="26" y="140">OpenAI SDK / 任意 HTTP</text>
+  <rect class="box" x="10" y="200" width="220" height="140" rx="10"/>
+  <text class="lbl" x="26" y="228">桌面外壳（Tauri v2）</text>
+  <text class="sub" x="26" y="254">主窗口：Preact 界面</text>
+  <text class="sub" x="26" y="276">托盘、单实例、全局快捷键</text>
+  <text class="sub" x="26" y="298">录制小条、听写小窗（隐藏预建）</text>
+  <text class="sub" x="26" y="320">启动 / 复用后台</text>
+  <rect class="box2" x="330" y="70" width="270" height="220" rx="12"/>
+  <text class="lbl" x="348" y="100">Python 后台（FastAPI）</text>
+  <text class="sub" x="348" y="124">127.0.0.1:9870，Bearer 口令</text>
+  <text class="sub" x="348" y="152">素材库、克隆与训练任务</text>
+  <text class="sub" x="348" y="174">朗读：分句、后处理、本机播放</text>
+  <text class="sub" x="348" y="196">听写：Silero VAD + SenseVoice（CPU）</text>
+  <text class="sub" x="348" y="218">声纹：CAM++（CPU）</text>
+  <text class="sub" x="348" y="240">MCP 服务器、事件总线（WebSocket）</text>
+  <text class="sub" x="348" y="262">idle：空闲卸载模型、自动退出</text>
+  <rect class="box" x="680" y="50" width="210" height="100" rx="10"/>
+  <text class="lbl" x="696" y="78">GPT-SoVITS api_v2</text>
+  <text class="sub" x="696" y="102">:9880，整合包自带 Python</text>
+  <text class="sub" x="696" y="124">推理约 3.5 GB 显存</text>
+  <rect class="boxm" x="680" y="190" width="210" height="100" rx="10"/>
+  <text class="lbl" x="696" y="218">OmniVoice（可选）</text>
+  <text class="sub" x="696" y="242">:9881，独立虚拟环境</text>
+  <text class="sub" x="696" y="264">与 GPT-SoVITS 不同时占显存</text>
+  <path class="arrow" d="M230 85 H330"/>
+  <text class="sub" x="246" y="76">HTTP / MCP</text>
+  <path class="arrow" d="M230 270 H330"/>
+  <text class="sub" x="246" y="261">HTTP + WS</text>
+  <path class="arrow" d="M600 110 H680"/>
+  <path class="arrow" d="M600 240 H680"/>
+  <text class="sub" x="608" y="101">子进程</text>
+  <text class="sub" x="608" y="231">子进程</text>
 </svg>
+<figcaption>所有组件只监听 127.0.0.1。外壳和 Agent 是平级的客户端，共用同一个后台。</figcaption>
+</figure>
 <ul>
-  <li>引擎永远作为<strong>独立进程</strong>运行，后端不 import 它的代码。整合包自带 Python，和后端的 3.11 虚拟环境互不影响。</li>
-  <li>后端用 Windows <strong>作业对象</strong>（<code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code>）托管所有子进程；Tauri 用 <code>set_process_group(true)</code> 启动后端。任何一层退出，下面的进程都会被系统回收，不留占显存的僵尸进程。</li>
-  <li>后端另外监视父进程 PID（<code>--parent-pid</code>），Tauri 崩溃时自行退出。</li>
+  <li><strong>引擎永远是独立进程</strong>，后台不 import 引擎代码。GPT-SoVITS 整合包自带 Python，OmniVoice 有自己的虚拟环境，和后台的 3.11 环境互不影响。</li>
+  <li>后台用 Windows 作业对象（<code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code>）托管引擎子进程：后台怎么退出，引擎都会被系统回收，不留占显存的进程。</li>
+  <li>界面只是后台的一个客户端：所有数据和任务都在后台，界面通过 HTTP 调用、通过 <code>WS /v1/events</code> 收状态。所以窗口关掉、重开，或者 Agent 在没有窗口时调用，行为一致。</li>
 </ul>
 
-<h2>2. 合成（说）</h2>
+<h2 id="life">2. 后台服务的生命周期</h2>
+<p>后台可能由三方启动：打开的软件、Agent 的 MCP 调用、命令行。规则是<strong>全机只有一个后台</strong>，谁先来谁启动，其他的复用。</p>
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-label="后台的发现与启动流程">
+  <rect class="box" x="10" y="30" width="200" height="64" rx="10"/>
+  <text class="lbl" x="26" y="58">读 data/runtime.json</text>
+  <text class="sub" x="26" y="80">base_url、运行时口令、pid</text>
+  <rect class="box" x="270" y="30" width="230" height="64" rx="10"/>
+  <text class="lbl" x="286" y="58">带口令请求 /v1/status</text>
+  <text class="sub" x="286" y="80">只看 /health 会误认旧文件</text>
+  <rect class="box2" x="580" y="30" width="300" height="64" rx="10"/>
+  <text class="lbl" x="596" y="58">可用：直接复用</text>
+  <text class="sub" x="596" y="80">不重复加载模型</text>
+  <rect class="box" x="270" y="150" width="230" height="110" rx="10"/>
+  <text class="lbl" x="286" y="178">不可用：启动 serve</text>
+  <text class="sub" x="286" y="202">锁文件 data/backend.starting</text>
+  <text class="sub" x="286" y="224">防止两个 Agent 同时启动两个</text>
+  <text class="sub" x="286" y="246">启动后再轮询 /v1/status</text>
+  <rect class="box" x="580" y="130" width="300" height="64" rx="10"/>
+  <text class="lbl" x="596" y="158">软件启动：Tauri 子进程</text>
+  <text class="sub" x="596" y="180">--parent-pid 监视外壳</text>
+  <rect class="box" x="580" y="210" width="300" height="64" rx="10"/>
+  <text class="lbl" x="596" y="238">MCP / 命令行：WMI 创建</text>
+  <text class="sub" x="596" y="260">Win32_Process.Create，不在作业对象里</text>
+  <path class="arrow" d="M210 62 H270"/>
+  <path class="arrow" d="M500 62 H580"/>
+  <path class="arrow" d="M385 94 V150"/>
+  <path class="arrow" d="M500 180 L580 162"/>
+  <path class="arrow" d="M500 230 L580 242"/>
+</svg>
+</figure>
+<table>
+  <tr><th>环节</th><th>做法</th></tr>
+  <tr><td>MCP 启动后台</td><td>MCP 客户端会把它启动的服务器进程放进作业对象，退出时结束整个作业，而且通常不允许子进程脱离。所以 stdio 版 MCP 通过 PowerShell 的 <code>Invoke-CimMethod Win32_Process Create</code> 让 WMI 创建后台（无窗口、不在作业里），Agent 退出后后台继续运行，之后打开的软件也直接复用；WMI 不可用时退回分离的 <code>Popen</code>。</td></tr>
+  <tr><td>空闲释放</td><td><code>idle.py</code> 每 30 秒检查一次。没有合成、训练、录音时，空闲 <code>idle.unload_minutes</code>（默认 10）分钟后停止语音引擎、释放显存，下次请求自动重新加载（约 15 秒）；没有界面连着 <code>/v1/events</code> 且空闲 <code>idle.exit_minutes</code>（默认 60）分钟后，后台退出。</td></tr>
+  <tr><td>软件退出</td><td>后台监视启动它的外壳进程。外壳退出时：如果最近（<code>exit_minutes</code> 以内）有具名 Agent 调用过，后台留下继续服务，把标准输出、错误重定向到 <code>NUL</code>（外壳的管道已经关闭），之后按空闲规则自己退出；否则立即退出。</td></tr>
+  <tr><td>界面上的控制</td><td><code>GET /v1/service</code> 返回运行时间、空闲时间、引擎状态和显卡占用；<code>POST /v1/service/unload</code>、<code>/v1/service/stop</code> 对应“立即释放显存”和“停止后台服务”。停止后外壳暂停自身的自动重连（<code>set_backend_paused</code>），否则隐藏的小窗会把后台又拉起来。</td></tr>
+  <tr><td>窗口与托盘</td><td>点关闭时界面拦截 <code>onCloseRequested</code>：按设置缩到托盘或退出，第一次询问。托盘菜单有“打开 / 释放显存 / 停止后台服务 / 退出”，后两项需要口令，由界面执行。主窗口被销毁时外壳调用 <code>app.exit</code>，因为隐藏的录制小条、听写小窗会让程序在没有可见窗口的情况下一直运行。<code>tauri-plugin-single-instance</code> 保证再次启动只是把已有窗口调到前台。</td></tr>
+</table>
+
+<h2 id="library">3. 素材库：录制与截取</h2>
+<table>
+  <tr><th>要点</th><th>做法</th></tr>
+  <tr><td>数据</td><td>一个素材文件夹就是一个声音（<code>voice.json</code> 里 <code>folder: true</code>，带素材语言 ja / zh / en）。片段存在 <code>data/voices/&lt;id&gt;/clips/</code>，元数据在 <code>clips.json</code>（时长、来源录音、截取区间、CAM++ 声纹）。原始录音以 FLAC 存在 <code>data/recordings/</code>，片段可以随时重新裁剪；没有片段引用的录音在放置 3 天后自动清理。</td></tr>
+  <tr><td>快捷键录制</td><td>全局快捷键按顺序尝试 Ctrl+Alt+R、Ctrl+Alt+Shift+R、Alt+Shift+R、Ctrl+Alt+F9，注册第一个空闲的（不用 Ctrl+Shift+R，它是浏览器的强制刷新）。按下后显示一个预先建好、不抢焦点的置顶小条，由它调用 <code>/v1/simple/record/toggle</code>，所以主窗口最小化时也能用。同一次按键 700 毫秒内只触发一次。</td></tr>
+  <tr><td>回环录音</td><td>PyAudioWPatch 把每个 WASAPI 输出设备复制成 <code>[Loopback]</code> 输入设备。<strong>PyAudio 实例、打开流和读流必须在同一线程</strong>，否则报 PortAudio -9999；设备空闲时回环不给数据，按真实时间补静音。</td></tr>
+  <tr><td>截取建议</td><td>Silero VAD 切出语音段，首尾建议为第一段前 0.2 秒到最后一段后 0.3 秒。每段（≥0.8 秒）算 CAM++ 声纹，与文件夹已有片段的平均声纹比较（没有片段时用第一段作基准，用户可以双击任意段改基准）；低于 0.5 的段默认去掉。实测同一人各段 0.55–0.73，混入的另一个人 0.26–0.36。</td></tr>
+  <tr><td>素材语言</td><td>新建文件夹时可以指定语言，也可以留空：第一个片段保存时用 SenseVoice 识别语种，写回文件夹。</td></tr>
+</table>
+
+<h2 id="clone">4. 克隆流水线</h2>
+<figure>
+<svg viewBox="0 0 900 200" role="img" aria-label="克隆流水线：片段、人声分离、切句、转写、筛选、零样本或训练">
+  <rect class="box" x="5" y="30" width="120" height="70" rx="8"/><text class="lbl" x="18" y="58">文件夹片段</text><text class="sub" x="18" y="80">全部作为来源</text>
+  <rect class="box" x="150" y="30" width="125" height="70" rx="8"/><text class="lbl" x="163" y="58">人声分离</text><text class="sub" x="163" y="80">BS-Roformer</text>
+  <rect class="box" x="300" y="30" width="110" height="70" rx="8"/><text class="lbl" x="313" y="58">VAD 切句</text><text class="sub" x="313" y="80">2–10 秒</text>
+  <rect class="box" x="435" y="30" width="135" height="70" rx="8"/><text class="lbl" x="448" y="58">转写</text><text class="sub" x="448" y="80">素材语言 + 复核</text>
+  <rect class="box" x="595" y="30" width="135" height="70" rx="8"/><text class="lbl" x="608" y="58">筛选</text><text class="sub" x="608" y="80">声纹 ≥0.45、质量</text>
+  <rect class="box2" x="755" y="10" width="140" height="62" rx="8"/><text class="lbl" x="768" y="36">&lt; 1 分钟</text><text class="sub" x="768" y="57">零样本（V5 turbo）</text>
+  <rect class="box2" x="755" y="88" width="140" height="62" rx="8"/><text class="lbl" x="768" y="114">≥ 1 分钟</text><text class="sub" x="768" y="135">训练 v2ProPlus</text>
+  <path class="arrow" d="M125 65 H150"/><path class="arrow" d="M275 65 H300"/><path class="arrow" d="M410 65 H435"/><path class="arrow" d="M570 65 H595"/>
+  <path class="arrow" d="M730 58 L755 44"/><path class="arrow" d="M730 74 L755 115"/>
+  <text class="sub" x="5" y="140">切出的句子时间换算回原始素材时间；目标声纹 = 与整体平均最接近的一半句子的平均。</text>
+  <text class="sub" x="5" y="162">参考音频 = 3–10 秒里质量分最高的一句（引擎硬性要求 3–10 秒）。片段集合的指纹记在 clips.json，</text>
+  <text class="sub" x="5" y="184">片段变化后界面提示“重新学习”。</text>
+</svg>
+</figure>
+<ul>
+  <li>人声分离可以在界面上关掉（“去除背景音乐”），素材本来就干净时更快。它用一个很薄的驱动脚本 <code>engine_scripts/uvr_separate.py</code>，由整合包的 Python 执行；输入先转成 44.1 kHz 立体声，裁剪后的多个保留段拼成一个文件（段间垫 1 秒静音）一次分离。</li>
+  <li>质量分 = 时长分 × 信噪比分 × 削波惩罚，另记录分离前的伴奏电平 <code>bgm_db</code>，重新训练时用来剔除伴奏重的句子。</li>
+  <li>训练期间语音合成暂停（返回明确的提示），训练前先停掉推理引擎，批量按空闲显存 GB ÷ 2 估算。</li>
+</ul>
+
+<h2 id="review">5. 转写校对</h2>
+<p>训练用的文字来自 SenseVoice，它不给置信度。CharaVoice 的做法是<strong>同一段音频识别两次</strong>：一次自动判断语种，一次强制用文件夹的素材语言（结果存为 <code>asr_alt</code>，并记下语言 <code>asr_alt_lang</code>）。两次结果相似度低于 0.9，就说明识别器拿不准。</p>
+<table>
+  <tr><th>规则</th><th>标为“可能有误”的情况</th></tr>
+  <tr><td>通用</td><td>没有识别出文字；两次识别不一致；同一个字连续重复 4 次以上</td></tr>
+  <tr><td>日语</td><td>没有假名（可能识别成了中文）；句中有多余的问号、感叹号；含字母；假名和汉字少于 60%；每秒字数不在 2.5–11 之间</td></tr>
+  <tr><td>中文</td><td>含假名；汉字少于 50%；句中有多余的问号、感叹号；每秒字数不在 1.5–9 之间</td></tr>
+  <tr><td>英语</td><td>含中日文字；每秒词数不在 0.8–5.5 之间</td></tr>
+</table>
+<p>用户在校对界面改字、排除句子或换参考音频。参考文字立即生效；改了训练文字后点“重新学习”，会沿用这些句子直接训练，不再重新切句和转写。</p>
+
+<h2 id="train">6. 训练与逐轮选优</h2>
+<figure>
+<svg viewBox="0 0 900 110" role="img" aria-label="训练阶段">
+  <rect class="box" x="5" y="25" width="100" height="60" rx="8"/><text class="lbl" x="17" y="51">1a 文本</text><text class="sub" x="17" y="71">1-get-text</text>
+  <rect class="box" x="125" y="25" width="135" height="60" rx="8"/><text class="lbl" x="137" y="51">1b 声学 / 声纹</text><text class="sub" x="137" y="71">2-get-hubert / sv</text>
+  <rect class="box" x="280" y="25" width="110" height="60" rx="8"/><text class="lbl" x="292" y="51">1c 语义</text><text class="sub" x="292" y="71">3-get-semantic</text>
+  <rect class="box" x="410" y="25" width="130" height="60" rx="8"/><text class="lbl" x="422" y="51">SoVITS</text><text class="sub" x="422" y="71">s2_train --config</text>
+  <rect class="box" x="560" y="25" width="140" height="60" rx="8"/><text class="lbl" x="572" y="51">GPT</text><text class="sub" x="572" y="71">s1_train --config_file</text>
+  <rect class="box2" x="720" y="25" width="175" height="60" rx="8"/><text class="lbl" x="732" y="51">切换权重 + 试听</text><text class="sub" x="732" y="71">版本存在 versions/</text>
+  <path class="arrow" d="M105 55 H125"/><path class="arrow" d="M260 55 H280"/><path class="arrow" d="M390 55 H410"/><path class="arrow" d="M540 55 H560"/><path class="arrow" d="M700 55 H720"/>
+</svg>
+</figure>
+<table>
+  <tr><th>要点</th><th>做法</th></tr>
+  <tr><td>底模</td><td>默认 v2ProPlus：同样 10 分钟素材，比 v2Pro、V5 turbo LoRA 等更像，速度与 v2Pro 相同。与没参与训练的真人录音比，CAM++ 相似度 LJSpeech 0.88（v2Pro 0.81）。</td></tr>
+  <tr><td>参数传递</td><td>和 webui.py 一致：准备脚本读环境变量（<code>inp_text</code>、<code>inp_wav_dir</code>、<code>opt_dir</code>、<code>version</code>、<code>is_half</code> 等）；训练脚本读由模板改写的配置。语义 token 由底模自己的量化器提取，按底模分别存成 <code>6-name2semantic-&lt;版本&gt;.tsv</code>。用 <code>runtime\python.exe -s</code> 执行。</td></tr>
+  <tr><td>目录</td><td>实验目录与权重都放在声音自己的文件夹（<code>train/exp</code>、<code>weights/</code>），不写引擎目录。<strong>启动 s2 前必须先建 <code>exp/logs_s2_&lt;版本&gt;</code></strong>，否则第一次保存检查点就失败。</td></tr>
+  <tr><td>断点与进度</td><td>s2 从最新的 G_/D_ 检查点续，s1 由 Lightning 从 <code>ckpt/</code> 续；进度解析 <code>====&gt; Epoch: N</code> 和 <code>Epoch N: xx%</code>。取消用 <code>taskkill /T</code> 结束整个进程树。</td></tr>
+</table>
+<h3>重新训练：干净素材 + 逐轮比较</h3>
+<p>从视频、游戏里录的素材常带伴奏残留和底噪，训练后的声码器会把 s、sh 这类擦音合成成没有结构的噪声，听起来像机器音。重新训练按下面的步骤处理：</p>
 <ol>
-  <li>启动：<code>runtime\python.exe -I api_v2.py -a 127.0.0.1 -p 9880 -c data/engine/tts_infer.yaml</code>，配置只写 <code>custom</code> 段（device、is_half、version、权重路径）。api_v2 没有健康检查接口，用 <code>GET /docs</code> 探活。</li>
-  <li>每个声音的请求带自己的参考音频与参考文本；权重不同就先调 <code>/set_gpt_weights</code>、<code>/set_sovits_weights</code>（引擎会按文件自动识别版本）。</li>
-  <li><code>POST /tts</code> 用 <code>streaming_mode=1</code>（逐句返回）：首包是只有头的 WAV，之后是裸 PCM，按 2 字节对齐切块，边收边播放。</li>
-  <li>播放线程每 30ms 写一块、同时算电平推给界面，所以 Agent 通过接口说话时圆环也会动。</li>
-  <li>流式模式：1 = 逐句（音质最好）、2/3 = 按语义 token 分块（3 最快，首包约 0.2 秒）。HTTP 流式响应的客户端中途断开时，生成器的 <code>finally</code> 标记任务放弃，合成循环随即退出并 <code>aclose()</code> 引擎流，引擎锁立刻释放；否则下一个请求要排在被丢弃的合成后面，首包会多出约 1 秒。</li>
-  <li>可选引擎 OmniVoice（独立虚拟环境 + 自写的 <code>engine_scripts/omnivoice_server.py</code>，按句流式）。两个引擎不同时占显存：启动一个前先停另一个（切换约 15 秒）。</li>
+  <li><strong>整理干净训练集</strong>（写到 <code>dataset/clean/</code>，原片段不动）：分离前伴奏电平 <code>bgm_db</code> 高于 −10 dB 的句子剔除；底噪能听到的句子（10% 分位能量与 95% 分位相差不到 50 dB）做一次温和的维纳滤波。剩下不足 60 秒就停止，并说明原因。</li>
+  <li><strong>训练并保留每一轮</strong>：SoVITS 训练 8 轮，每轮的权重都留下（<code>keep_s2</code>）。</li>
+  <li><strong>逐轮试听比较</strong>：每个候选（含原模型）合成同一组测试句，测三项：4.5–11 kHz 擦音段的频谱平坦度（越低越有结构）、嘶声电平、与文件夹声纹的相似度。</li>
+  <li><strong>选择与清理</strong>：在相似度不低于原模型 97% 的候选里取平坦度最低的；新的各轮都不如原模型就保留原模型。<strong>只保留胜出的一版</strong>，其余权重删除。</li>
 </ol>
-<div class="note">参考音频必须 3-10 秒（引擎在 TTS.py 里硬性检查）。参考文本为空时后端用 SenseVoice 自动转写。语种按文字自动判断：含假名为日语，含汉字为中文，否则英语。</div>
 
-<h2>3. 听写（听）</h2>
-<p>麦克风 16kHz → 每 30ms 一块送 Silero VAD（<code>is_speech_detected()</code> 的上升沿推 <code>speech_start</code>）→ VAD 弹出片段时推 <code>speech_end</code> → 独立线程用 SenseVoice 识别并推 <code>transcript</code>（文字、语种、情绪）。单次 <code>listen</code> 把间隔小于 <code>turn_silence</code>（默认 1.2 秒）的片段拼成一句再返回。角色说话时默认暂停听写，避免录进自己的声音。</p>
+<h2 id="read">7. 朗读与去齿音</h2>
+<table>
+  <tr><th>环节</th><th>做法</th></tr>
+  <tr><td>分句与流式</td><td>界面按句末标点和换行分句（过短的并入后句，过长的在逗号处再切），每句请求 <code>/v1/audio/speech</code>（<code>stream: true</code>，WAV 头之后是裸 PCM），在同一个 <code>AudioContext</code> 上首尾相接排队播放；上一句数据到齐就请求下一句。首包是长度为 0 的 WAV 头，要跳过 44 字节按 PCM 解析。</td></tr>
+  <tr><td>预热</td><td>切换文件夹或合成方式时调用 <code>/v1/simple/folders/&lt;id&gt;/warm</code>，用一句很短的话（如“你好。”）让引擎加载这个声音的权重和参考，真正朗读时首句不用等。</td></tr>
+  <tr><td>语速</td><td>每个文件夹单独设置，默认 0.9 倍（GPT-SoVITS 默认语速对朗读偏快）。Agent 调用时同样生效。</td></tr>
+  <tr><td>合成方式</td><td>“标准”用文件夹自己的 GPT-SoVITS 结果；“音质优先”用 OmniVoice 以文件夹里最干净的几句（拼到 10 秒内）零样本克隆，擦音更清楚，相似度略低（0.81 对 0.86）。切换引擎要先停另一个，约 15 秒。</td></tr>
+</table>
+<h3>去齿音</h3>
+<figure>
+<svg viewBox="0 0 900 190" role="img" aria-label="分频动态去齿音：带通分出齿音频段，其余部分等于延迟后的输入减去该频段">
+  <rect class="box" x="5" y="70" width="110" height="56" rx="8"/><text class="lbl" x="20" y="96">输入</text><text class="sub" x="20" y="115">合成语音</text>
+  <rect class="box2" x="170" y="20" width="190" height="56" rx="8"/><text class="lbl" x="184" y="45">线性相位 FIR 带通</text><text class="sub" x="184" y="65">4.5–11 kHz，约 3 ms</text>
+  <rect class="box" x="170" y="120" width="190" height="56" rx="8"/><text class="lbl" x="184" y="145">其余 = 延迟输入 − 频段</text><text class="sub" x="184" y="165">不衰减时完全还原</text>
+  <rect class="box" x="420" y="20" width="220" height="56" rx="8"/><text class="lbl" x="434" y="45">每 2 ms 测频段占比</text><text class="sub" x="434" y="65">超过阈值：每 dB 衰减 1.5 dB</text>
+  <rect class="box" x="700" y="70" width="190" height="56" rx="8"/><text class="lbl" x="714" y="96">相加输出</text><text class="sub" x="714" y="115">瞬时起控，30 ms 释放</text>
+  <path class="arrow" d="M115 92 L170 50"/><path class="arrow" d="M115 104 L170 146"/>
+  <path class="arrow" d="M360 48 H420"/><path class="arrow" d="M640 48 L700 90"/><path class="arrow" d="M360 148 L700 108"/>
+</svg>
+</figure>
+<p>阈值按说话人自适应：从文件夹的句子里测一次这个人平时的齿音占比中位数 <code>sib_norm</code>，存进 <code>clips.json</code>。</p>
+<table>
+  <tr><th>强度</th><th>阈值</th><th>最大衰减</th></tr>
+  <tr><td>关</td><td>—</td><td>—</td></tr>
+  <tr><td>轻</td><td><code>sib_norm</code> + 2 dB</td><td>4 dB</td></tr>
+  <tr><td>中（默认）</td><td><code>sib_norm</code></td><td>6 dB</td></tr>
+  <tr><td>强</td><td>−9 dB（固定）</td><td>8 dB</td></tr>
+</table>
+<div class="note">齿音刺耳的主要来源是素材本身（回环录音、有损压缩）和微调后的 32 kHz 声码器。去齿音只能减轻，素材干净才是根本，所以重新训练先整理干净训练集。</div>
 
-<h3>全局听写</h3>
+<h2 id="lang">8. 语种判断</h2>
+<p>调用方没指定语言时（或文件夹的“朗读语言”是自动），按文字判断：</p>
+<figure>
+<svg viewBox="0 0 900 170" role="img" aria-label="语种判断规则">
+  <rect class="box" x="5" y="55" width="110" height="56" rx="8"/><text class="lbl" x="20" y="88">文字</text>
+  <rect class="box" x="160" y="10" width="170" height="44" rx="8"/><text class="lbl" x="174" y="37">有假名</text>
+  <rect class="box" x="160" y="62" width="170" height="44" rx="8"/><text class="lbl" x="174" y="89">有汉字、无假名</text>
+  <rect class="box" x="160" y="114" width="170" height="44" rx="8"/><text class="lbl" x="174" y="141">只有字母</text>
+  <rect class="box2" x="380" y="10" width="110" height="44" rx="8"/><text class="lbl" x="396" y="37">日语</text>
+  <rect class="box" x="380" y="62" width="300" height="44" rx="8"/><text class="sub" x="394" y="82">1–4 个字，且无简体字形、无中文标点？</text><text class="sub" x="394" y="99">（日语的人名、地名常是这样）</text>
+  <rect class="box2" x="730" y="36" width="165" height="44" rx="8"/><text class="lbl" x="744" y="63">跟随素材语言</text>
+  <rect class="box2" x="730" y="90" width="165" height="44" rx="8"/><text class="lbl" x="744" y="117">中文</text>
+  <rect class="box2" x="380" y="114" width="110" height="44" rx="8"/><text class="lbl" x="396" y="141">英语</text>
+  <path class="arrow" d="M115 76 L160 32"/><path class="arrow" d="M115 84 H160"/><path class="arrow" d="M115 92 L160 136"/>
+  <path class="arrow" d="M330 32 H380"/><path class="arrow" d="M330 84 H380"/><path class="arrow" d="M330 136 H380"/>
+  <path class="arrow" d="M680 78 L730 60"/><text class="sub" x="690" y="58">是</text>
+  <path class="arrow" d="M680 90 L730 110"/><text class="sub" x="690" y="114">否</text>
+</svg>
+</figure>
 <ul>
-  <li>Rust 用 <code>tauri-plugin-global-shortcut</code> 按候选列表注册第一个空闲的组合（Ctrl+Alt+Space 常被其他程序占用，依次退到 Ctrl+Shift+Space、Alt+Shift+D）。注册失败不能 panic，要在运行时逐个尝试。</li>
-  <li>听写小窗启动时就以隐藏状态建好（<code>focusable(false)</code>、置顶、透明），按键时只 <code>show()</code> 并发事件。窗口不可获得焦点，用户原来的输入框保持光标，第一次按键也不会因为加载网页漏掉开头的话。</li>
-  <li>后端听一轮：VAD 关闭片段时给出 <code>end_lag</code>（实际说完到现在的样本数），以“真正说完”的时刻起算 0.7 秒（可设置）结束；识别完用 <code>SendInput</code> + <code>KEYEVENTF_UNICODE</code> 逐字符输入，中日文不经过输入法。实测说完到出字 0.70-0.74 秒。</li>
+  <li>中文、日语句子里夹的英文单词保留在原语种里读（GPT-SoVITS 的 zh、ja 模式能读中英、日英混合）。</li>
+  <li>显式传入的 <code>language</code> 优先。说的语言和素材语言不同时，接口返回 <code>accent_warning</code>，界面和 MCP 都会提示可能带口音。</li>
+  <li>跨语言的音色和语调受方法限制：GPT-SoVITS 里语调由 GPT（语义模型）和它接着念的参考句决定，让 GPT 跟着母语参考走，语调更地道，但相似度明显下降（中文 0.78 → 0.56）。实测日语素材训练的声音：日语 0.85、英语 0.77、中文 0.74。要自然的另一种语言，只能用这个人说该语言的素材。</li>
 </ul>
 
-<h2>4. 素材流水线</h2>
-<svg viewBox="0 0 820 120" role="img" aria-label="素材流水线">
-  <g>
-    <rect class="box" x="5" y="30" width="110" height="56" rx="8"/><text class="lbl" x="18" y="55">导入/回环录音</text><text class="sub" x="18" y="74">ffmpeg 44.1k 立体声</text>
-    <rect class="box" x="140" y="30" width="100" height="56" rx="8"/><text class="lbl" x="152" y="55">波形裁剪</text><text class="sub" x="152" y="74">保留段 ∖ 删除段</text>
-    <rect class="box" x="265" y="30" width="110" height="56" rx="8"/><text class="lbl" x="277" y="55">人声分离</text><text class="sub" x="277" y="74">BS-Roformer</text>
-    <rect class="box" x="400" y="30" width="100" height="56" rx="8"/><text class="lbl" x="412" y="55">VAD 切句</text><text class="sub" x="412" y="74">2-10 秒</text>
-    <rect class="box" x="525" y="30" width="125" height="56" rx="8"/><text class="lbl" x="537" y="55">转写 + 打分</text><text class="sub" x="537" y="74">SenseVoice / 声纹</text>
-    <rect class="box" x="675" y="30" width="140" height="56" rx="8"/><text class="lbl" x="687" y="55">审阅 → 导出</text><text class="sub" x="687" y="74">wav|spk|LANG|text</text>
-    <path class="arrow" d="M115 58 H140"/><path class="arrow" d="M240 58 H265"/><path class="arrow" d="M375 58 H400"/><path class="arrow" d="M500 58 H525"/><path class="arrow" d="M650 58 H675"/>
-  </g>
-</svg>
-<ul>
-  <li>裁剪后的多个保留段拼成一个文件（段间垫 1 秒静音）一次性分离；切出的句子时间再换算回原始素材时间（落在垫片里的就吸附到最近的保留段边界）。</li>
-  <li>人声分离用一个很薄的驱动脚本 <code>engine_scripts/uvr_separate.py</code>，由整合包的 Python 执行，调用它的 <code>Roformer_Loader._path_audio_()</code>；输入需先转成 44.1kHz 立体声，输出 <code>&lt;名字&gt;_vocals.wav</code>。</li>
-  <li>声纹相似度：sherpa-onnx <code>SpeakerEmbeddingExtractor</code> + 3D-Speaker CAM++（中英通用）。默认目标是该声音的参考音频，也可以用勾选的片段平均。实测同一人 0.86-0.96，不同人约 0.02-0.15。</li>
-  <li>质量分 = 时长分 × 信噪比分 × 削波惩罚（信噪比用帧能量 90/10 分位估算，只作排序参考）。</li>
-  <li>回环录音：PyAudioWPatch 把每个 WASAPI 输出设备复制成 <code>[Loopback]</code> 输入设备。<strong>PyAudio 实例、打开流和读流必须在同一线程</strong>，否则报 PortAudio -9999；设备空闲时回环不给数据，按真实时间补静音。</li>
-</ul>
+<h2 id="ptt">9. 按住说话</h2>
+<ol>
+  <li>外壳注册全局快捷键（Ctrl+Alt+V，被占用时依次尝试 Ctrl+Alt+Shift+V、Alt+Shift+V、Ctrl+Alt+F10），按下、松开两个边沿都发给界面，界面调用 <code>/v1/ptt/start</code>、<code>/v1/ptt/stop</code>。</li>
+  <li><code>ptt.py</code> 打开麦克风缓存 16 kHz 音频；松开后用 Silero VAD 只留下语音（前后补一点），SenseVoice 在 CPU 上识别并判断语种。</li>
+  <li>默认用设置里选的声音（<code>ptt.voice</code>）念出来，也可以关掉“自动念”只返回文字。实测松开到开始念 0.5–1.4 秒。</li>
+  <li><code>/v1/ptt/simulate</code> 用音频文件代替麦克风，方便自动化测试。</li>
+</ol>
 
-<h2>5. 训练</h2>
-<svg viewBox="0 0 820 110" role="img" aria-label="训练阶段">
-  <g>
-    <rect class="box" x="5" y="25" width="95" height="56" rx="8"/><text class="lbl" x="16" y="50">1a 文本</text><text class="sub" x="16" y="69">1-get-text</text>
-    <rect class="box" x="118" y="25" width="120" height="56" rx="8"/><text class="lbl" x="129" y="50">1b 声学/声纹</text><text class="sub" x="129" y="69">2-get-hubert, 2-get-sv</text>
-    <rect class="box" x="256" y="25" width="100" height="56" rx="8"/><text class="lbl" x="267" y="50">1c 语义</text><text class="sub" x="267" y="69">3-get-semantic</text>
-    <rect class="box" x="374" y="25" width="120" height="56" rx="8"/><text class="lbl" x="385" y="50">SoVITS</text><text class="sub" x="385" y="69">s2_train --config</text>
-    <rect class="box" x="512" y="25" width="130" height="56" rx="8"/><text class="lbl" x="523" y="50">GPT</text><text class="sub" x="523" y="69">s1_train --config_file</text>
-    <rect class="box" x="660" y="25" width="155" height="56" rx="8"/><text class="lbl" x="671" y="50">切换权重 + 试听</text><text class="sub" x="671" y="69">zh / en / ja 测试句</text>
-    <path class="arrow" d="M100 53 H118"/><path class="arrow" d="M238 53 H256"/><path class="arrow" d="M356 53 H374"/><path class="arrow" d="M494 53 H512"/><path class="arrow" d="M642 53 H660"/>
-  </g>
-</svg>
-<table>
-  <tr><th>要点</th><th>做法</th></tr>
-  <tr><td>参数传递</td><td>和 webui.py 一致：准备脚本全部读环境变量（<code>inp_text</code>、<code>inp_wav_dir</code>、<code>opt_dir</code>、<code>i_part</code>/<code>all_parts</code>、<code>version</code>、<code>is_half</code>…）；训练脚本读由模板改写的配置（<code>configs/s2v2ProPlus.json</code> 或 <code>s2v2Pro.json</code>、<code>configs/s1longer-v2.yaml</code>）。默认底模是 v2ProPlus：同样 10 分钟素材，比 v2Pro、V5 turbo LoRA、VoxCPM2 LoRA、Qwen3-TTS 微调都更像，速度与 v2Pro 相同。语义 token 由底模自己的量化器提取，按底模分别存成 <code>6-name2semantic-&lt;版本&gt;.tsv</code>。用 <code>runtime\python.exe -s</code> 执行。</td></tr>
-  <tr><td>目录</td><td>实验目录与权重输出都指向声音自己的文件夹（<code>data/voices/&lt;id&gt;/train/exp</code>、<code>weights/</code>），不写引擎目录。<strong>启动 s2 前必须先建 <code>exp/logs_s2_&lt;版本&gt;</code></strong>，否则第一次保存检查点就失败。</td></tr>
-  <tr><td>断点续训</td><td>s2 从 <code>logs_s2_&lt;版本&gt;</code> 里最新的 G_/D_ 检查点续；s1 由 Lightning 从 <code>ckpt/</code> 续。准备阶段产物存在就跳过。所以“继续训练”就是用同一目录重新跑。</td></tr>
-  <tr><td>显存</td><td>训练前停掉推理引擎，并在训练期间拒绝合成请求（返回明确提示）。批量按空闲显存 GB ÷ 2 估算（webui 用总显存 ÷ 2）。</td></tr>
-  <tr><td>进度</td><td>s2 解析 <code>====&gt; Epoch: N</code>；s1 解析 Lightning 的 <code>Epoch N: xx%</code>。中断用 <code>taskkill /T</code> 结束整个进程树（含 DataLoader 子进程）。</td></tr>
-</table>
-
-<h3>简易模式：素材文件夹一键克隆（日语）</h3>
-<table>
-  <tr><th>要点</th><th>做法</th></tr>
-  <tr><td>数据</td><td>一个素材文件夹就是一个声音（<code>voice.json</code> 里 <code>folder: true</code>，语言固定 ja）。片段存在 <code>data/voices/&lt;id&gt;/clips/</code>，元数据在 <code>clips.json</code>（时长、标签、来源录音、截取区间、CAM++ 声纹）。被截取的原始录音以 FLAC 存在 <code>data/recordings/</code>，所以片段可以随时重新裁剪；没有片段引用的录音在删除片段时、或放置 3 天后自动清理。</td></tr>
-  <tr><td>快捷键录制</td><td>Tauri 全局快捷键按顺序尝试 Ctrl+Alt+R、Ctrl+Alt+Shift+R、Alt+Shift+R、Ctrl+Alt+F9（不用 Ctrl+Shift+R，它是浏览器的强制刷新）。按下后显示一个预先创建的、不抢焦点的置顶小条，由它调用 <code>/v1/simple/record/toggle</code>，所以主窗口最小化时也能用；停止后后端发 <code>simple_recorded</code> 事件，小条把主窗口还原，主窗口打开截取编辑器。同一次按键 700 ms 内只触发一次。</td></tr>
-  <tr><td>截取建议</td><td>Silero VAD 切出语音段，首尾建议 = 第一段开始前 0.2 秒到最后一段结束后 0.3 秒。每段（≥0.8 秒）算 CAM++ 声纹，返回段与段之间的相似度矩阵，以及与文件夹已有片段平均声纹的相似度。基准优先用文件夹已有片段，没有时用第一段，用户可以双击任意段改为基准；低于 0.5 的段默认去掉。JVNV 实测：同一女声各段 0.55-0.73，混入的男声 0.26-0.36。</td></tr>
-  <tr><td>一键克隆</td><td>把文件夹全部片段作为来源送进素材流水线（人声分离、切句、转写），语种统一标为 ja；取与整体平均声纹最接近的一半语句求目标声纹，删掉相似度低于 0.45 或质量分低于 15 的句子；挑 3-10 秒里质量分最高的一句作零样本参考（底模 V5 turbo）。有效语音 ≥1 分钟且用户选择训练时，再以 v2ProPlus 训练（<code>fresh</code>），训练期间合成暂停。片段集合的指纹记录在 <code>clips.json</code>，片段变化后界面提示“重新学习”。</td></tr>
-  <tr><td>朗读与导出</td><td>界面按 。！？ 和换行分句（过短的并入后句，超过 120 字在 、 处再切），逐句请求 <code>/v1/audio/speech</code>，播放第 i 句时预取 i+1、i+2，暂停 / 停止由界面控制。导出走 <code>/v1/simple/folders/&lt;id&gt;/export</code>：整篇分块合成、拼接后统一加水印和“AI 合成”元数据，写到 <code>data/exports/</code>。</td></tr>
-</table>
-
-<h2>6. 声线调节与自然度</h2>
-<svg viewBox="0 0 820 130" role="img" aria-label="合成后处理链">
-  <g>
-    <rect class="box" x="5" y="30" width="120" height="60" rx="8"/><text class="lbl" x="17" y="55">按标点分句</text><text class="sub" x="17" y="74">逐句请求 cut0</text>
-    <rect class="box" x="145" y="30" width="110" height="60" rx="8"/><text class="lbl" x="157" y="55">去头尾静音</text><text class="sub" x="157" y="74">保留 0.25s 回看</text>
-    <rect class="box" x="275" y="30" width="125" height="60" rx="8"/><text class="lbl" x="287" y="55">声线 PSOLA</text><text class="sub" x="287" y="74">+ 倒谱包络处理</text>
-    <rect class="box" x="420" y="30" width="125" height="60" rx="8"/><text class="lbl" x="432" y="55">后处理（可选）</text><text class="sub" x="432" y="74">压缩 去齿音 响度</text>
-    <rect class="box" x="565" y="30" width="110" height="60" rx="8"/><text class="lbl" x="577" y="55">停顿 / 呼吸</text><text class="sub" x="577" y="74">按标点 ±15%</text>
-    <rect class="box" x="695" y="30" width="120" height="60" rx="8"/><text class="lbl" x="707" y="55">播放 / 流式返回</text><text class="sub" x="707" y="74">房间感 限幅</text>
-    <path class="arrow" d="M125 60 H145"/><path class="arrow" d="M255 60 H275"/><path class="arrow" d="M400 60 H420"/><path class="arrow" d="M545 60 H565"/><path class="arrow" d="M675 60 H695"/>
-  </g>
-</svg>
-<table>
-  <tr><th>环节</th><th>做法与实测</th></tr>
-  <tr><td>音高</td><td>自写 TD-PSOLA：基频用 pyworld 的 DIO + StoneMask，在约 16kHz 副本上算、<code>allowed_range=0.2</code>（默认值会把 15-45% 的有声帧判成无声，变调量明显不足），40ms 以内的无声空隙线性补齐；分析标记按 F0 周期放置，<strong>不要对齐波形峰值</strong>（对齐后预测 MOS 低 0.4）；输出按窗口和的 20ms 平滑值归一化，逐点除会把新的脉冲串抹平。每秒音频约 10ms。对比：WORLD 只做分析重合成 MOS 就从 3.54 降到 2.58，stftpitchshift 变调 MOS 1.39，Signalsmith 会连共振峰一起移。</td></tr>
-  <tr><td>年龄感 / 明亮度 / 气声</td><td>一次 STFT（约 32ms 帧，保留原相位）：对数幅度谱的低倒谱（1.5ms 以内）得到包络，除掉包络后按频率缩放包络再乘回（共振峰），叠加以 1kHz 为轴的倾斜（明亮度），1.5kHz 以上在语音帧加包络形状的噪声（气声）。±10% 共振峰 MOS 3.28/3.12（原声 3.54）。</td></tr>
-  <tr><td>流式</td><td><code>voicefx.Stream</code> 每次最多处理 1 秒，带 80ms 左上下文、40ms 预读，块间 10ms 交叉淡化；块处理在线程里逐个取出，首块额外延迟 5-18ms。</td></tr>
-  <tr><td>停顿</td><td>CharaVoice 自己按标点切句、逐句请求引擎（<code>text_split_method=cut0</code>），去掉引擎自带的头尾静音后按标点插入停顿（逗号 0.2s、句末 0.45s、省略号 0.5s、换段 0.8s，±15% 抖动，随语速缩放）；第一句不与后句合并，保证首包不变慢。</td></tr>
-  <tr><td>呼吸</td><td>从声音自己的素材里找无 F0、电平在语音下 12-40dB、150-500ms、其后 0.6s 内有语音的片段，按原始相对电平保存；插入在较长新句之前的停顿里。修剪过的朗读素材通常找不到。</td></tr>
-  <tr><td>后处理</td><td>5ms 块 RMS 压缩（2:1）、5-9kHz 动态去齿音、pyloudnorm 测响度到 -16 LUFS（首句定增益，之后缓慢跟随）、合成小房间脉冲响应（RT60 约 0.3s，湿声 -26dB）、-62dBFS 粉红底噪、软拐点限幅。用 UTMOS22 在同一批音频上逐项测：压缩 -0.08、响度 -0.04、混响 -0.10、底噪 -0.04，所以默认只开停顿和响度。</td></tr>
-</table>
-<div class="note">MOS 预测模型偏爱“干”声，混响、底噪、呼吸都会被它当成劣化；这类处理是否更像真人，要用盲听判断。</div>
-
-<h2>7. Agent 接口</h2>
+<h2 id="mcp">10. MCP 与其他接口</h2>
 <table>
   <tr><th>接口</th><th>说明</th></tr>
-  <tr><td><code>POST /v1/audio/speech</code></td><td>OpenAI 兼容；<code>model</code>/<code>voice</code> = 声音 id；<code>language</code>、<code>response_format</code>、<code>stream</code>、<code>play</code>（false 只返回音频）。非流式输出带 AudioSeal 水印和“AI 合成”元数据。</td></tr>
-  <tr><td><code>POST /v1/speak</code></td><td>播放并返回 JSON；<code>wait=true</code> 等播完。</td></tr>
-  <tr><td><code>POST /v1/audio/transcriptions</code></td><td>OpenAI 兼容转写，返回 text / language（verbose_json 带分段）。</td></tr>
-  <tr><td><code>POST /v1/listen</code>、<code>WS /v1/listen</code></td><td>听一句；实时事件 speech_start / speech_end / transcript。</td></tr>
-  <tr><td>MCP</td><td><code>list_voices</code>、<code>speak</code>、<code>synthesize</code>、<code>stop</code>，声音就是素材库里训练好的文件夹（日语）；基于 MCP Python SDK 2.x 的 <code>MCPServer</code>。stdio 用 <code>charavoice-backend.exe mcp</code>；Streamable HTTP 挂在后端 <code>/mcp</code>：自己建 <code>StreamableHTTPSessionManager(app=server._lowlevel_server)</code>，在 FastAPI 的 lifespan 里 <code>async with manager.run()</code>，路由用一个检查口令后转给 <code>manager.handle_request</code> 的 ASGI 对象，并限定 Host/Origin 为本机（防 DNS 重绑定）。</td></tr>
-  <tr><td>后台自动启动</td><td>stdio 版 MCP 和命令行先读 <code>data/runtime.json</code>，用其中的口令请求 <code>/v1/status</code> 判断后端是否可用（只看 <code>/health</code> 会把旧文件当成新后端）。不可用时在后台启动 <code>serve</code>，用锁文件防止两个 Agent 同时启动两个。<strong>MCP 客户端会把它启动的服务器放进作业对象（job object），退出时结束整个作业，而且通常不允许脱离</strong>，所以后端经 WMI 的 <code>Win32_Process.Create</code> 创建（不在作业里、无窗口），Agent 退出后它继续运行，之后打开的软件也直接复用。</td></tr>
-  <tr><td>显存与后台</td><td><code>idle.py</code> 每 30 秒检查：没有合成、训练、录音时，空闲 <code>idle.unload_minutes</code>（默认 10）分钟后停止语音引擎、释放显存，下次请求自动重新加载；没有界面窗口连着 <code>/v1/events</code> 且空闲 <code>idle.exit_minutes</code>（默认 60）分钟后，后端退出。<code>GET /v1/service</code> 返回状态和显卡占用，<code>POST /v1/service/unload</code>、<code>/v1/service/stop</code> 对应界面上的两个按钮；软件停止后台后会暂停自身的自动重连，避免隐藏的小窗又把后端拉起来。</td></tr>
-  <tr><td>按 Agent 分配声音</td><td>调用方名字依次取：环境变量 <code>CHARAVOICE_AGENT</code>、请求头 <code>X-CharaVoice-Agent</code>、MCP 握手里的 <code>client_params.client_info.name</code>。后端记到 <code>data/agents.json</code>，请求没指定 voice 时用绑定的声音和默认情绪。</td></tr>
-  <tr><td>口令</td><td>运行时口令每次启动重新生成（<code>data/runtime.json</code>）；另有长期有效的 Agent 口令（<code>data/agent_token</code>），给需要写进配置的 MCP HTTP / OpenAI 客户端用。</td></tr>
-  <tr><td>能力发现</td><td><code>GET /.well-known/charavoice.json</code> 列出接口、MCP 工具和可用参数。</td></tr>
+  <tr><td>MCP 工具</td><td><code>list_voices</code>、<code>speak</code>、<code>synthesize</code>、<code>stop</code>、<code>listen</code>。基于 MCP Python SDK 2.x 的 <code>MCPServer</code>；声音就是素材库里已就绪的文件夹。</td></tr>
+  <tr><td>stdio</td><td><code>charavoice-mcp</code>（源码版）或 <code>charavoice-backend.exe mcp</code>（安装版）。它本身不加载模型，只是后台的 HTTP 客户端，需要时按第 2 节自动启动后台。</td></tr>
+  <tr><td>Streamable HTTP</td><td>挂在后台的 <code>/mcp</code>：自己建 <code>StreamableHTTPSessionManager(app=server._lowlevel_server)</code>，在 FastAPI 的 lifespan 里 <code>async with manager.run()</code>；路由用一个检查口令后转给 <code>manager.handle_request</code> 的 ASGI 对象，并限定 Host / Origin 为本机，防止 DNS 重绑定。</td></tr>
+  <tr><td>按 Agent 分配声音</td><td>调用方名字依次取：环境变量 <code>CHARAVOICE_AGENT</code>、请求头 <code>X-CharaVoice-Agent</code>、MCP 握手里的 <code>client_info.name</code>。记在 <code>data/agents.json</code>，没指定 voice 时用绑定的声音。</td></tr>
+  <tr><td>口令</td><td>运行时口令每次启动重新生成，写在 <code>data/runtime.json</code>（命令行和 stdio MCP 自动读取）；长期有效的 Agent 口令在 <code>data/agent_token</code>，给需要写进配置的 HTTP 客户端用。</td></tr>
+  <tr><td>HTTP</td><td>OpenAI 兼容的 <code>/v1/audio/speech</code>、<code>/v1/audio/transcriptions</code>；便捷接口 <code>/v1/speak</code>、<code>/v1/listen</code>；事件 <code>WS /v1/events</code>（状态与实时音量）。非流式输出带 AudioSeal 水印和“AI 合成”元数据。能力清单 <code>/.well-known/charavoice.json</code>。</td></tr>
 </table>
-<pre>claude mcp add --transport http charavoice http://127.0.0.1:9870/mcp --header "Authorization: Bearer &lt;Agent 口令&gt;"</pre>
+<pre>claude mcp add charavoice -- "&lt;CharaVoice 目录&gt;\.venv\Scripts\charavoice-mcp.exe"</pre>
 
-<h2>8. 安装包与模型管理</h2>
+<h2 id="build">11. 安装包</h2>
 <ul>
-  <li>后端用 PyInstaller 冻结为单目录 <code>charavoice-backend.exe</code>（同一个 exe 是后端 <code>serve</code>、命令行和 stdio MCP），作为 Tauri 资源打进 NSIS 安装包（按用户安装，约 150MB）。<code>mcp</code> 包不要整体收集（<code>mcp.cli</code> 依赖 typer），只收 <code>mcp.server</code>、<code>mcp.shared</code>。</li>
-  <li>冻结后的后端默认数据目录是 <code>%LOCALAPPDATA%\io.github.rudans.charavoice</code>，和 Tauri 的 identifier 一致，所以命令行和 MCP 不需要任何配置就能找到运行中的后端。</li>
-  <li>模型与引擎在“模型”页下载：断点续传（Range）、进度事件、GPT-SoVITS 整合包用下载来的 <code>7zr.exe</code> 解压、OmniVoice 用下载来的 <code>uv</code> 建环境。删除只允许删除数据目录里的内容。</li>
-  <li>没有 ffmpeg 时，WAV/FLAC/OGG/MP3 用 soundfile 解码、scipy 重采样。</li>
+  <li>后台用 PyInstaller 冻结为单目录 <code>charavoice-backend.exe</code>（同一个 exe 是后台 <code>serve</code>、命令行和 stdio MCP），作为 Tauri 资源打进 NSIS 安装包（按用户安装）。<code>mcp</code> 包不要整体收集（<code>mcp.cli</code> 依赖 typer），只收 <code>mcp.server</code>、<code>mcp.shared</code>。</li>
+  <li>冻结后的后台默认数据目录是 <code>%LOCALAPPDATA%\io.github.rudans.charavoice</code>，与 Tauri 的 identifier 一致，所以命令行和 MCP 不需要配置就能找到运行中的后台；<code>CHARAVOICE_HOME</code> 可以改到别处。</li>
+  <li>模型与引擎不进安装包，在“模型”页下载：断点续传（Range）、进度事件，GPT-SoVITS 整合包用下载来的 <code>7zr.exe</code> 解压，OmniVoice 用下载来的 <code>uv</code> 建环境。删除只允许删除数据目录里的内容。</li>
+  <li>构建：<code>scripts\build-installer.bat</code>。用 uv 建的虚拟环境里没有 pip，脚本检查 PyInstaller 时用 <code>import PyInstaller</code>，缺了再用 <code>uv pip install</code> 安装。</li>
 </ul>
 
-<h2>9. 踩过的问题</h2>
-
-
+<h2 id="issues">12. 踩过的问题</h2>
 <table>
   <tr><th>现象</th><th>原因与处理</th></tr>
+  <tr><td>Agent 退出后后台也没了</td><td>MCP 客户端结束了作业对象里的所有进程。改由 WMI 创建后台（第 2 节）。</td></tr>
+  <tr><td>MCP 连上了一个已经退出的后台</td><td>旧的 <code>runtime.json</code> 还在，端口又被新进程占了，只看 <code>/health</code> 会误判。改为带口令请求 <code>/v1/status</code>。</td></tr>
+  <tr><td>关掉主窗口后程序还在后台跑</td><td>隐藏预建的录制小条、听写小窗让程序在没有可见窗口时继续运行，快捷键也还生效。主窗口销毁时显式退出；需要常驻时缩到托盘。</td></tr>
+  <tr><td>“音质优先”没有效果</td><td>文件夹声音到引擎的路由放在了构造请求之后。路由要在 <code>build_request</code> 之前。</td></tr>
+  <tr><td>界面不停地预热、切换引擎</td><td>两个引擎都发“就绪”事件，引擎状态被 OmniVoice 覆盖。界面的引擎状态只看 GPT-SoVITS，预热只在切换文件夹或合成方式时触发。</td></tr>
+  <tr><td>按一次快捷键，录音开始又立刻停止</td><td>快捷键事件和小条的自动切换各触发了一次。小条只在自己的开始按钮上自动切换，并加 700 毫秒去抖。</td></tr>
   <tr><td>引擎日志乱码</td><td><code>python -I</code> 会忽略 <code>PYTHONIOENCODING</code>，子进程按系统 ANSI 代码页输出；读管道时用 <code>locale.getencoding()</code> 解码。</td></tr>
-  <tr><td>偶发合成卡几分钟</td><td>显卡被其他程序占满（模拟器、编辑器）时会出现；后端 90 秒无输出就报错并自动重启引擎。CUDA Graph 首次遇到新长度需要捕获，启动后先做一次预热。</td></tr>
-  <tr><td>两个窗口同时检测到后端退出，拉起两个后端</td><td>Rust 侧用异步互斥锁串行化 <code>backend_info</code>；后端发现端口已占用直接退出。</td></tr>
-  <tr><td>热更新后 WebGL 退回静态图</td><td>组件卸载时不要 <code>loseContext()</code>，同一个 canvas 可能被复用；只释放缓冲区和程序。</td></tr>
+  <tr><td>偶发合成卡几分钟</td><td>显卡被其他程序占满时会出现；后台 90 秒无输出就报错并自动重启引擎。</td></tr>
   <tr><td>AudioSeal 报找不到 cl</td><td>0.2 版默认 <code>torch.compile</code>；设 <code>NO_TORCH_COMPILE=1</code> 走即时模式，4.7 秒音频嵌入约 0.16 秒（CPU）。</td></tr>
-  <tr><td>部分导出报“operands could not be broadcast”</td><td>水印在 16kHz 上生成再重采样回来，奇数长度会少 1 个样本；补齐到原长度。</td></tr>
-  <tr><td>读引擎流式 WAV 得到 0 帧</td><td>流式响应的 WAV 头里数据长度是 0，soundfile 照此读不到样本；跳过 44 字节头直接按 PCM 解析。</td></tr>
-  <tr><td>OmniVoice 的 instruct 和参考音频一起用效果不稳</td><td>实测“low pitch”反而升调、“whisper”无效；instruct 只用于不带参考的“文字设计声音”，生成后把选中的候选作为参考再克隆（相似度 0.74-0.84）。</td></tr>
-  <tr><td>Tauri 打包报“重分析点”（os error 4395）</td><td>在打包环境里 <code>%LOCALAPPDATA%\tauri\NSIS</code> 被文件虚拟化，删除重建失败；清掉该目录后重新 <code>tauri build</code>。</td></tr>
+  <tr><td>打包报“重分析点”（os error 4395）</td><td>在打包环境里 <code>%LOCALAPPDATA%\tauri\NSIS</code> 被文件虚拟化，删除重建失败；清掉该目录后重新 <code>tauri build</code>。</td></tr>
 </table>
 
-<h2>10. 接入自己的项目</h2>
+<h2 id="use">13. 接入自己的项目</h2>
 <ol>
-  <li>装好 CharaVoice（安装包或 <code>setup.bat</code>），在“模型”页装好必需组件；只给 Agent 用可以直接运行后端。</li>
-  <li>从 <code>data/runtime.json</code> 读 <code>base_url</code> 和 <code>token</code>，以 <code>Authorization: Bearer</code> 调用上面的接口；或者直接接 MCP。</li>
-  <li>需要界面状态联动时订阅 <code>WS /v1/events?token=…</code>：<code>state</code>（idle/listening/thinking/speaking）、<code>level</code>（source=speak/mic，0-1）。</li>
+  <li>按 README 运行 <code>setup.bat</code>，或用安装版并在“模型”页装好必需组件；只给 Agent 用可以只运行后台。</li>
+  <li>最简单的方式是接 MCP。要直接调用 HTTP，从 <code>data/runtime.json</code> 读 <code>base_url</code> 和 <code>token</code>，以 <code>Authorization: Bearer</code> 调用。</li>
+  <li>需要界面联动（比如角色说话时的动画）时订阅 <code>WS /v1/events?token=…</code>：<code>state</code>（idle / listening / thinking / speaking）和 <code>level</code>（0–1 的实时音量）。</li>
   <li>只能用于本人或已获授权的声音；接口输出带水印，可用 <code>POST /v1/audio/watermark/detect</code> 检测。</li>
 </ol>
+<p class="muted">也可以把仓库代码和这份文档一起交给 AI，让它帮你读懂结构、写接入代码。</p>
 </main>
+</div>
 </body>
 </html>

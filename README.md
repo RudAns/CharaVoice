@@ -1,218 +1,230 @@
 # CharaVoice
 
-**在自己电脑上运行的角色声音：让任何 Agent 都能“说”和“听”。**
+**在自己电脑上克隆角色声音，再通过 MCP 交给任何 Agent 使用。**
 
-CharaVoice 是一个本地桌面软件，只做两件事：
+CharaVoice 是一个 Windows 本地桌面软件，把三件事连成一条线：整理声音素材 → 学习这个人的声线 → 让 Claude Code、Cursor 等 Agent 用这个声音说话、听你说话。录音、训练、合成全部在本机完成，不上传任何音频。
 
-1. **说**：用一段 3-10 秒录音零样本克隆角色声音、用文字描述设计一个新声音，或者用自己的素材训练，合成中文、英文、日语语音。
-2. **听**：实时听麦克风，自动断句，转成文字并识别语种；也可以在任何输入框里按快捷键直接听写。
+![素材库](Docs/images/library.png)
 
-它不包含大语言模型。Claude Code、Cursor、Open-LLM-VTuber 或你自己写的程序，都可以通过本地 HTTP 接口（OpenAI 兼容）、命令行或 MCP 工具调用它，而且每个 Agent 可以有自己的声音。语音默认由 CharaVoice 在本机播放，界面中央的光环和能量球随真实音量起伏，显示待机、聆听、合成、说话四种状态；也可以缩成一个置顶的桌面伴随小窗。
+## 核心功能
 
-技术实现说明见 [Docs/Implementation.html](Docs/Implementation.html)（下载后用浏览器打开）。如需使用，可以把工程代码和这份 HTML 一起交给 AI，让它帮忙接入自己的项目。
-
-## 功能
-
-| 能力 | 说明 |
+| | |
 | --- | --- |
-| 多语言 | 素材文件夹按语言（日语 / 中文 / 英语，可自动识别）转写、复核和训练；合成按文字自动判断语种，跨语言时提示可能带口音 |
-| 按住说话 | 在“训练”页按住麦克风按钮，或在任何地方按住 Ctrl+Alt+V（被占用时自动换组合），说完松开：SenseVoice 识别后用选中的声音念出来（可关“自动念”只填文字） |
-| 简易模式（首页） | 只做日语声线克隆，一屏四步：按 Ctrl+Alt+R（被占用时自动换组合）录制电脑正在播放的声音，窗口最小化也能用；停止后自动打开波形，首尾已对准第一句和最后一句，声纹不像的段落标红去掉；片段存进“素材文件夹”（一个文件夹就是一个人或角色，可打标签、拖动移动、重新裁剪、直接拖入音频文件）；一键克隆整个文件夹（不到 1 分钟零样本，1 分钟以上训练 v2ProPlus）；粘贴日语文章逐句流式朗读，可暂停，导出 WAV / MP3 |
-| 零样本声音 | 上传 3-10 秒参考录音即可使用，参考文本自动识别；可选 GPT-SoVITS V5 turbo 或 OmniVoice 两种零样本引擎 |
-| 文字设计声音 | 选性别、年龄、音调、耳语、口音，一次生成 3 个候选，试听后选一个保存为新声音（OmniVoice，中英文） |
-| 训练声音 | 素材 ≥1 分钟即可训练（建议 10 分钟），训练向导含开训前检查、按显存选参数、进度与日志、中断后继续、训完自动试听 |
-| 素材流水线 | 导入音视频或录制电脑播放的声音 → 波形裁剪 → 人声分离（BS-Roformer）→ 切成 2-10 秒单句 → 自动转写 → 质量分、声纹相似度、语调起伏 → 审阅 → 导出训练列表 |
-| 情绪参考 | 每个声音可挂多段带情绪标签的参考录音，调用时传 `emotion`（happy、sad、gentle 等）切换 |
-| 声线调节 | 音高（保持音色）、年龄感（共振峰）、明亮度、气声四个滑块和“更甜 / 更低沉 / 更年轻 / 更成熟”预设；可存为声音默认值，也可每次调用临时指定 |
-| 自然度 | 按标点决定停顿长短并带随机变化、响度统一；可选呼吸（取自该声音自己的素材）、动态与去齿音、轻微房间感 |
-| 流式合成 | 边合成边播放 / 边返回，首包最快约 0.2 秒；客户端中途断开会立即停止合成 |
-| 三语合成 | 中 / 英 / 日，按文字自动判断语种，也可手动指定 |
-| 实时听写 | Silero VAD 断句 + SenseVoice 识别（CPU），说话过程中每 0.4 秒更新中间结果 |
-| 全局听写 | 在任何程序的输入框里按 Ctrl+Alt+Space（被占用时自动换成 Ctrl+Shift+Space 等），说完约 0.7 秒后文字直接输入到光标处 |
-| 按 Agent 分配声音 | 自动识别 MCP 客户端名字（如 claude-code），也可用请求头或 `--agent` 指定；在界面里给每个 Agent 选声音和默认情绪 |
-| 接入方式 | OpenAI 兼容 HTTP、`charavoice` 命令行、MCP（stdio 与 Streamable HTTP）、`/.well-known/charavoice.json` 能力清单 |
-| 模型管理 | 安装包不带任何模型，首次运行在“模型”页按需下载，显示用途、大小、许可和进度，可断点续传 |
-| 合规 | 新建声音必须确认“本人声音 / 已获授权的声音”（文字设计的声音标记为合成声音）并记录确认时间；接口生成的音频写入“AI 合成”元数据并嵌入 AudioSeal 水印（可在设置里关闭） |
+| **素材库** | 按 Ctrl+Alt+R 录下电脑正在播放的声音（游戏、视频、直播），窗口最小化也能用；在波形上截取，首尾自动对准第一句和最后一句，声纹不像的段落自动标出；一个文件夹就是一个人或角色，片段可以拖动归类，也能直接拖入音频文件 |
+| **转写校对** | 素材自动切成单句并转写，可能有误的句子会标出来，逐句试听、改字、排除，或设为参考音频 |
+| **训练** | 一键学习整个文件夹：不到 1 分钟的素材做零样本克隆，1 分钟以上训练 GPT-SoVITS v2ProPlus；可以用干净的素材重新训练，逐轮比较后只保留最好的一版 |
+| **日中英三语** | 每个文件夹有自己的素材语言（日语 / 中文 / 英语，可自动识别）；合成时按文字自动判断语种，也可以手动固定 |
+| **接入 Agent（MCP）** | `list_voices`、`speak`、`synthesize`、`stop`、`listen` 五个工具；软件没开时 Agent 第一次调用会在后台自动启动服务，空闲 10 分钟自动释放显存 |
+| **按住说话** | 按住 Ctrl+Alt+V（或界面上的按钮）说话，松开后识别成文字，再用选中的声音念出来 |
+| **朗读** | 逐句流式播放，可调语速、音质方式和去齿音强度；对 Agent 调用同样生效 |
 
-## 实测性能
+<table>
+<tr>
+<td width="50%"><img src="Docs/images/trim.png" alt="截取：波形上的保留段和去掉的段"></td>
+<td width="50%"><img src="Docs/images/transcripts.png" alt="转写校对"></td>
+</tr>
+<tr>
+<td width="50%"><img src="Docs/images/train.png" alt="训练与试听"></td>
+<td width="50%"><img src="Docs/images/mcp.png" alt="接入 Agent"></td>
+</tr>
+</table>
 
-测试机：RTX 3060 12GB、i7-13700KF、Windows 11。显存为使用中的峰值，已扣除其他程序占用。
+关闭窗口时可以缩到托盘：快捷键和 Agent 调用继续可用，点托盘图标重新打开，右键托盘图标可以释放显存、停止后台服务或退出。
 
-| 引擎 / 声音 | 首包延迟（逐句流式，英 / 中） | 首包延迟（低延迟流式，英 / 中） | 实时率 RTF（英 / 中） | 显存 |
-| --- | --- | --- | --- | --- |
-| GPT-SoVITS v2ProPlus，训练后的声音（中英日 12 句中位数） | 0.43 秒 | 0.19 秒 | 0.28 | 约 3.4 GB |
-| GPT-SoVITS V5 turbo，零样本 | 0.66 / 0.43 秒 | 0.55 / 0.50 秒 | 0.38 / 0.28 | 约 3.8 GB |
-| OmniVoice，零样本（16 步 / 快速 8 步） | 1.26 / 1.16 秒 | 0.65 / 0.60 秒 | 0.35 / 0.38 | 约 4.7 GB |
+## 跨语言的限制
+
+每个声音用它素材的语言说话最像本人。让它说别的语言也可以，但音色会差一些，语调也会带素材语言的口音，比如用日语素材训练的声音说中文，听起来像日本人在说中文。软件在试听框和 MCP 返回里都会提示这一点。
+
+实测（一个用约 2.5 分钟日语素材训练的声音，CAM++ 声纹相似度，越高越像）：日语 0.85，英语 0.77，中文 0.74。
+
+想要某种语言自然，就给这个人准备该语言的素材，单独建一个文件夹。我们试过让母语声音先念、再用声音转换（RVC）换成目标音色：语调变地道了，但中文的相似度降到 0.52，所以没有采用。
+
+## 硬件要求与实测性能
+
+- Windows 10 / 11 64 位，NVIDIA 显卡。推理约占 3.5 GB 显存，训练峰值约 7 GB，建议 8 GB 以上（测试机为 12 GB）。
+- 磁盘约 20 GB：GPT-SoVITS 整合包解压后约 15 GB，听写和声纹模型约 1 GB。
+- 听写和转写只用 CPU。
+
+测试机：RTX 3060 12GB、i7-13700KF、Windows 11。
 
 | 指标 | 结果 |
 | --- | --- |
-| 零样本声纹相似度（英文，与真人参考比，CAM++） | GPT-SoVITS v2Pro 0.48、V5 turbo 0.78、OmniVoice 0.86 |
-| 训练（默认 v2ProPlus 底模） | 10 分钟素材从开始到可用约 6 分钟，训练显存峰值约 7 GB。与没参与训练的真人录音比：LJSpeech 0.88（v2Pro 0.81）；日语情绪语料 JVNV 0.74 |
-| 训练还是零样本 | 对有特色、不在公开数据里的声音（JVNV 日语），零样本已接近训练：V5 turbo 0.73、OmniVoice 0.72 对训练 0.74。训练的好处是开口更快（0.19 对约 0.55 秒）、跨语言更稳（日语声音说中文，识别准确率 0.92 对 OmniVoice 0.30） |
-| 全局听写 | 说完到文字出现 0.70-0.74 秒（VAD 判定 0.5 秒 + 识别 0.08-0.22 秒 + 输入 0.02 秒） |
-| 文件转写 | 52 秒中英混合音频 1.8 秒转完（CPU，RTF 0.035） |
-| 声线调节 | 每秒音频 4-20 毫秒处理；流式首块额外延迟 5-18 毫秒；±3 半音时与原声相似度 0.85-0.86 |
-| 自然度 | 按标点停顿与响度统一不增加首包延迟（194 对 189 毫秒）；停顿时长的变异系数从 0.31 提高到 0.44 |
+| 训练过的声音，引擎已加载时开口 | 0.2–0.8 秒 |
+| 合成速度 | 实时率 0.22–0.33，即比实时快 3–4 倍 |
+| 引擎刚启动或刚释放显存后的第一句 | 约 15 秒（加载模型） |
+| 按住说话（松开到开始念） | 0.5–1.4 秒 |
+| 训练 | 10 分钟素材从开始到可用约 6 分钟 |
+| 听写准确率（SenseVoice，CPU） | 中文字错误率 1.6%，英文词错误率 3.1% |
 
-首包延迟是引擎预热后的中位数；开机后第一次调用和切换到另一个声音时需要多 1-2 秒加载模型。
+## 快速开始（从源码运行）
 
-## 安装
-
-### 安装包（推荐）
-
-运行 `CharaVoice_<版本>_x64-setup.exe`（装到当前用户目录，不需要管理员权限）。第一次打开时界面顶部会提示缺少的组件，进入“模型”页按需安装：
-
-| 组件 | 用途 | 下载大小 |
-| --- | --- | --- |
-| Silero VAD、SenseVoice、3D-Speaker CAM++ | 听写、转写、声纹（必需） | 约 270 MB |
-| GPT-SoVITS 官方整合包 | 语音合成与训练（必需，需 NVIDIA 显卡） | 约 10.9 GB，解压后约 15 GB |
-| OmniVoice | 可选的零样本引擎和文字设计声音 | 约 5 GB，首次启动再下载约 3 GB 权重 |
-
-模型、引擎和声音数据都放在 `%LOCALAPPDATA%\io.github.rudans.charavoice`，卸载程序不会删除它们。国内网络可以在该目录的 `data\settings.json` 里加上 `"download": {"hf_endpoint": "https://hf-mirror.com"}`。
-
-### 从源码运行
-
-需要 Python 3.11；界面还需要 Node.js LTS、pnpm 和 Rust 工具链。在 cmd 里进入本仓库目录：
+需要 Python 3.11、Node.js LTS、pnpm 和 Rust 工具链。在 cmd 里进入本仓库目录：
 
 ```bat
 setup.bat
 start.bat
 ```
 
-`setup.bat` 会创建虚拟环境、下载听写模型和 GPT-SoVITS 整合包（`setup.bat --with-omnivoice` 另装 OmniVoice）；`start.bat` 打开窗口，窗口会自动启动后端和声音引擎，关闭时一并退出。只给 Agent 用、不需要窗口时运行 `start-backend.bat`。源码模式下数据放在仓库里的 `engines\`、`models\`、`data\`，这三个目录不进入版本库。
+- `setup.bat`：创建虚拟环境，下载听写模型、声纹模型和 GPT-SoVITS 官方整合包（约 11 GB，可断点续传），安装界面依赖。加 `--with-omnivoice` 另装 OmniVoice（“音质优先”朗读用，约 5 GB）。国内网络可以先 `set HF_ENDPOINT=https://hf-mirror.com`。
+- `start.bat`：以开发模式打开窗口，窗口会自动启动后台服务和声音引擎。第一次要编译界面，需要几分钟；之后每次启动也会先检查编译，所以比安装版慢。
+- `start-backend.bat`：只启动后台服务，不开窗口，只给 Agent 用时运行它。
 
-自己打安装包：
+源码模式下，引擎、模型和声音数据放在仓库里的 `engines\`、`models\`、`data\`，这三个目录不进版本库。
+
+想打一个双击就能打开的安装包（NSIS，装到当前用户，不需要管理员权限）：
 
 ```bat
 scripts\build-installer.bat
 ```
 
+安装版的数据放在 `%LOCALAPPDATA%\io.github.rudans.charavoice`，模型和引擎在首次运行时按需下载，卸载不会删除数据。
+
 ## 使用流程
 
-只想克隆一个人的日语声线，用首页的**简易模式**就够了：新建素材文件夹 → 播放这个人说话的视频或游戏，按 Ctrl+Alt+R 录制、再按一次停止 → 在波形上确认首尾，保存片段（攒到 1 分钟以上更好）→ 点“克隆这个声线” → 在“朗读”里粘贴日语文章。下面是侧栏“高级”里的完整流程：
-
-1. **模型**：首次使用先安装必需组件。
-2. **声音库 → 新建**：用录音克隆（选择“本人声音”或“已获授权的声音”并确认，上传 3-10 秒清晰录音），或用文字设计一个合成声音。马上就能说话。
-3. **声线调节**：在声音详情里拖动滑块或点预设，点“试听”立刻听到效果，满意后保存为默认。
-4. **素材**：导入音视频，或点“录制电脑声音”录下正在播放的内容；在裁剪编辑器里剪掉别人的声音和音乐；处理完在审阅区试听、改字、按阈值删掉低质量或声纹不像的片段，把语调起伏大又清晰的片段设为参考。
-5. **训练**：检查通过后开始训练，训完自动切换到新权重并生成中英日试听。
-6. **接入 Agent**：见下文，或界面里的“接入 Agent”页（命令会自动填好本机路径和口令）。
+1. **素材库**：新建文件夹（一个人或一个角色），播放这个人说话的视频或游戏，按 Ctrl+Alt+R 开始录制、再按一次停止；在波形上确认首尾后保存。攒到 1 分钟以上效果更好，3–10 分钟最好。
+2. **训练**：点“克隆这个声线”。软件会分离人声、切句、转写、筛掉别人的声音，然后做零样本克隆或训练（训练前会说明要占用显卡多久）。完成后可以点“转写”检查文字，改完点“重新学习”。
+3. **试听**：在试听框输入文字，点“试听”，或按住“按住说话”说一句。
+4. **接入 Agent**：在“接入 Agent”页复制对应客户端的配置（路径和口令已经按本机填好）。
 
 ## 接入 Agent
 
-后端只监听 `127.0.0.1:9870`。所有 `/v1` 接口和 `/mcp` 都需要 `Authorization: Bearer <口令>`：
+### Claude Code
 
-- **Agent 口令**：长期有效，写进 Agent 配置用，在“接入 Agent”页复制或重新生成。
-- **运行时口令**：每次启动重新生成，写在 `data\runtime.json`，命令行和 stdio 版 MCP 会自动读取。
-
-### MCP
-
-软件里的“接入 Agent”页会按本机实际路径生成 Claude Code、Claude Desktop、Cursor 的配置，一键复制即可。声音就是“素材库”里训练好的文件夹；每个文件夹有自己的语言（日语、中文或英语），用这个语言说最自然，说其他语言也可以，但可能带外语口音，工具返回里会提示。
-
-stdio（推荐）：Agent 启动 CharaVoice 的 MCP 程序。软件没开也能用：第一次调用时会在后台（无窗口）自动启动 CharaVoice；软件或后台已经在运行时直接复用，不会重复加载模型。安装版的程序是 `charavoice-backend.exe mcp`，源码版是 `.venv\Scripts\charavoice-mcp.exe`：
+stdio（推荐，软件没开也能用）：
 
 ```bat
-claude mcp add charavoice -- "<CharaVoice 安装目录>\backend\charavoice-backend.exe" mcp
+claude mcp add charavoice -- "<CharaVoice 目录>\.venv\Scripts\charavoice-mcp.exe"
 ```
 
-Streamable HTTP（需要 CharaVoice 正在运行）：
+安装版把程序换成 `"<安装目录>\backend\charavoice-backend.exe" mcp`。加上 `-s user` 可以让所有项目都能用。
+
+### Claude Desktop / Cursor
+
+Claude Desktop 在“设置 → 开发者 → 编辑配置”里打开 `claude_desktop_config.json`；Cursor 用项目里或用户目录下的 `.cursor\mcp.json`。内容相同：
+
+```json
+{
+  "mcpServers": {
+    "charavoice": {
+      "command": "<CharaVoice 目录>\\.venv\\Scripts\\charavoice-mcp.exe",
+      "args": []
+    }
+  }
+}
+```
+
+安装版：`"command"` 填 `charavoice-backend.exe` 的路径，`"args": ["mcp"]`。
+
+### Streamable HTTP
+
+需要 CharaVoice 正在运行，口令在“接入 Agent”页复制：
 
 ```bat
 claude mcp add --transport http charavoice http://127.0.0.1:9870/mcp --header "Authorization: Bearer <Agent 口令>"
 ```
 
+### 工具
+
 | 工具 | 参数 | 作用 |
 | --- | --- | --- |
-| `list_voices` | 无 | 列出训练好的声音：`voice`（传给其他工具的 id）、名字、语言、状态、是否默认 |
-| `speak` | `text`，可选 `voice`、`language`（ja / zh / en，默认按文字自动判断）、`wait` | 用这个声音在本机念出来；不传 `voice` 时用给这个 Agent 绑定的声音，没有绑定就用默认声音 |
-| `synthesize` | `text`，可选 `voice`、`language`、`format`（wav / mp3） | 生成音频文件（带 AI 标记和水印），返回文件路径和时长 |
+| `list_voices` | 无 | 列出可用的声音：`voice`（传给其他工具的 id）、名字、素材语言、是否默认 |
+| `speak` | `text`，可选 `voice`、`language`（ja / zh / en，默认按文字判断）、`wait` | 用这个声音在本机念出来 |
+| `synthesize` | `text`，可选 `voice`、`language`、`format`（wav / mp3） | 生成音频文件（带 AI 标记和水印），返回路径和时长 |
 | `stop` | 无 | 停止正在播放的语音 |
-| `listen` | 可选 `timeout`（默认 15 秒）、`max_seconds`（默认 30 秒） | 打开麦克风听用户说一句，停顿约 1.2 秒算说完，返回文字和语种；没人开口就超时返回空 |
+| `listen` | 可选 `timeout`（默认 15 秒）、`max_seconds`（默认 30 秒） | 打开麦克风听用户说一句，返回文字和语种 |
 
-语言自动判断：有假名按日语；只有字母按英语；没有假名的汉字句按中文，只有 1–4 个字、没有简体字形和中文标点的短词才跟随声音的语言（例如日语声音念“東京”）。
+不传 `voice` 时，用给这个 Agent 绑定的声音，没有绑定就用默认声音。每个 Agent 按 MCP 客户端名字区分（如 `claude-code`），可以在“接入 Agent”页给它绑定声音。
 
-语速、去齿音、音质方式按“训练”页里该声音的朗读设置。实测（RTX 3060，训练过的声音）：引擎已加载时 0.2-0.8 秒出声；后台刚启动或模型刚被卸载后，第一句要等引擎加载，约 15 秒。
+语种判断：有假名按日语；只有字母按英语；没有假名的汉字句按中文，只有 1–4 个字、又没有简体字形和中文标点的短词，跟随声音的素材语言（例如日语声音念“東京”）。
 
-**显存与后台**：空闲 10 分钟后自动卸载模型、释放显存（约 3.5 GB），下次调用时自动重新加载；软件窗口关着时空闲 1 小时，后台自动退出，Agent 下次调用时再自动启动。两个时间都可以在“设置”里改（0 = 不自动）。“接入 Agent”页和“设置”页显示后台是否在运行、模型是否占着显存，并可以“立即释放显存”或“停止后台服务”。
+**后台与显存**：后台服务在 `127.0.0.1:9870` 运行，软件和所有 Agent 共用一个，不会重复加载模型。空闲 10 分钟后卸载模型、释放显存，下次调用自动重新加载；没有窗口连着且空闲 1 小时后，后台自动退出，Agent 下次调用时再启动。两个时间都可以在“设置”里改（0 表示不自动）。
 
-### 命令行
+### 命令行与 HTTP
+
+同一套功能也可以用命令行或 HTTP 调用：
 
 ```bat
-charavoice-backend.exe speak "你好，我们开始吧。" --voice <声音id>
-charavoice-backend.exe speak "我用自己的声音说话" --agent my-agent --preset sweet
-charavoice-backend.exe speak "Save this instead." --out hello.wav --no-play
-charavoice-backend.exe listen --timeout 15
-charavoice-backend.exe voices
+.venv\Scripts\charavoice.exe speak "你好，我们开始吧。" --voice <声音id>
+.venv\Scripts\charavoice.exe speak "Save this instead." --out hello.wav --no-play
+.venv\Scripts\charavoice.exe listen --timeout 15
+.venv\Scripts\charavoice.exe voices
 ```
 
-源码版把 `charavoice-backend.exe` 换成 `.venv\Scripts\charavoice.exe`。后端没运行时会先在后台自动启动它；启动失败才报错并以退出码 2 结束。
-
-### HTTP（兼容 OpenAI 格式）
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| POST | `/v1/audio/speech` | 合成。`model` 或 `voice` 填声音 id；可选 `language`、`response_format`（wav / mp3 / opus / aac / flac / pcm）、`stream`、`streaming_mode`、`play`（false = 只返回音频）、`emotion`、`pitch`、`formant`、`brightness`、`breath`、`preset`、`naturalness`、`agent` |
-| POST | `/v1/audio/transcriptions` | 上传音频转文字（multipart，`file`），返回 `text` 与 `language` |
-| GET | `/v1/voices` | 声音列表 |
-| POST | `/v1/speak` | 便捷接口：播放并返回 JSON（含首包延迟），`wait=true` 等播完 |
-| POST | `/v1/listen` | 听一句话并返回文字 |
-| WS | `/v1/listen?token=…` | 实时听写事件：`speech_start`、`partial`、`speech_end`、`transcript` |
-| WS | `/v1/events?token=…` | 状态（idle / listening / thinking / speaking）与实时音量 |
-| POST | `/v1/audio/stop` | 停止当前播放 |
-| GET | `/v1/agents` | 接入过的 Agent 及其声音绑定 |
-| POST | `/v1/audio/watermark/detect` | 检测音频里的 AudioSeal 水印 |
-| GET | `/.well-known/charavoice.json` | 能力清单，供 Agent 自动发现 |
-
-请求头 `X-CharaVoice-Agent: <名字>` 表明调用方身份，未指定声音时使用该 Agent 绑定的声音。
+HTTP 接口兼容 OpenAI 的 `/v1/audio/speech` 和 `/v1/audio/transcriptions`，需要请求头 `Authorization: Bearer <口令>`：
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:9870/v1", api_key="<Agent 口令>",
-                default_headers={"X-CharaVoice-Agent": "my-agent"})
+client = OpenAI(base_url="http://127.0.0.1:9870/v1", api_key="<Agent 口令>")
 client.audio.speech.create(model="<声音id>", voice="<声音id>", input="こんにちは！").write_to_file("hello.wav")
 print(client.audio.transcriptions.create(model="sensevoice", file=open("hello.wav", "rb")).text)
 ```
 
-引擎未启动、正在启动或正在训练时，接口返回 503 和明确的中文说明；合成 90 秒没有输出会自动重启引擎并报错，不会让调用方一直等待。完整接口文档见运行时的 `http://127.0.0.1:9870/docs`。
+完整接口文档在运行时的 `http://127.0.0.1:9870/docs`；能力清单在 `/.well-known/charavoice.json`。
+
+## 高级功能
+
+“设置 → 显示高级功能”会显示更细的功能：
+
+- 声音库：用 3–10 秒录音零样本建声音，或用文字描述设计一个合成声音（OmniVoice）。
+- 情绪参考、声线调节（音高、年龄感、明亮度、气声）、自然度后处理。
+- 完整的素材流水线、训练向导和模型管理。
+- 全局听写：在任何输入框里按 Ctrl+Alt+Space，说完后文字直接输入到光标处。
+
+## 技术文档
+
+实现细节见 [Docs/Implementation.html](Docs/Implementation.html)（下载后用浏览器打开）：进程结构、素材流水线、训练与逐轮选优、去齿音、流式朗读、语种判断、MCP 与后台服务。
+
+## AI 提示
+
+本项目在 AI 编程助手的协助下开发。想把 CharaVoice 接进自己的项目，可以把仓库代码和 `Docs/Implementation.html` 一起交给 AI，让它帮你读懂结构、写接入代码，或者按你的需要改功能。
+
+## 负责任使用
+
+- 只克隆**你本人的声音**，或**已获得本人明确授权的声音**。第一次使用素材库前，软件会要求确认这一点。
+- 不得用克隆的声音冒充他人、诈骗、诽谤或做其他违法的事。
+- 导出和接口生成的音频会写入“AI 合成”元数据，并嵌入不可听的 AudioSeal 水印（本机直接播放和流式输出不加水印）。可以用 `POST /v1/audio/watermark/detect` 检测。
+
+## 第三方组件与模型
+
+CharaVoice 不包含、也不分发任何第三方模型权重或引擎文件。它们由 `setup.bat` 或软件里的“模型”页从官方地址下载，各自遵循原许可：
+
+| 组件 | 用途 | 许可 |
+| --- | --- | --- |
+| [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)（代码与预训练权重） | 语音合成与训练 | MIT |
+| UVR5 / BS-Roformer 分离模型（随 GPT-SoVITS 整合包提供） | 人声分离 | 随整合包分发，遵循各自来源的许可 |
+| [OmniVoice](https://github.com/k2-fsa/OmniVoice)（可选） | “音质优先”朗读、文字设计声音 | 代码 Apache-2.0；权重许可以模型页为准 |
+| [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | 语音识别、VAD、声纹推理 | Apache-2.0 |
+| [Silero VAD](https://github.com/snakers4/silero-vad) | 语音活动检测 | MIT |
+| [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice)（sherpa-onnx 转换版） | 中英日韩粤语音识别 | FunASR Model Open Source License v1.1（使用时需保留来源与模型名称） |
+| [3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++（sherpa-onnx 转换版） | 声纹相似度 | Apache-2.0 |
+| [AudioSeal](https://github.com/facebookresearch/audioseal) | 音频水印 | MIT（代码与权重） |
+| [PyTorch](https://pytorch.org/)（CPU 版） | AudioSeal 推理 | BSD-3-Clause |
+| [pyworld](https://github.com/JeremyCCHsu/Python-Wrapper-for-World-Vocoder)（WORLD） | 基频检测 | MIT（WORLD 为修改版 BSD） |
+| [NumPy](https://numpy.org/)、[SciPy](https://scipy.org/) | 信号处理 | BSD-3-Clause |
+| [pyloudnorm](https://github.com/csteinmetz1/pyloudnorm) | 响度测量 | MIT |
+| [soundfile](https://github.com/bastibe/python-soundfile)、[sounddevice](https://github.com/spatialaudio/python-sounddevice) | 音频读写、麦克风与播放 | BSD-3-Clause、MIT |
+| [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) | WASAPI 回环录音 | Apache-2.0（内含 PortAudio，MIT） |
+| [FastAPI](https://fastapi.tiangolo.com/)、[python-multipart](https://github.com/Kludex/python-multipart)、[PyYAML](https://pyyaml.org/) | 后端框架 | MIT、Apache-2.0、MIT |
+| [Uvicorn](https://www.uvicorn.org/)、[HTTPX](https://www.python-httpx.org/)、[websockets](https://github.com/python-websockets/websockets) | HTTP 服务与客户端 | BSD-3-Clause |
+| [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | MCP 服务器 | MIT |
+| [Tauri](https://tauri.app/) 及其插件、[Tokio](https://tokio.rs/)、[Serde](https://serde.rs/) | 桌面外壳 | MIT / Apache-2.0 |
+| [Preact](https://preactjs.com/)、[Vite](https://vite.dev/) | 界面 | MIT |
+| [PyInstaller](https://pyinstaller.org/)、[NSIS](https://nsis.sourceforge.io/) | 构建安装包（不随代码分发） | GPL-2.0 含 bootloader 例外（打包产物不受 GPL 约束）、zlib |
+
+听写模型可以在设置里换成 Whisper（sherpa-onnx 转换版，MIT）。开发测试只用了公有领域的 [LJSpeech](https://keithito.com/LJ-Speech-Dataset/)，以及 [AISHELL-3](https://www.openslr.org/93/)（Apache-2.0）、[JVNV](https://sites.google.com/site/shinnosuketakamichi/research-topics/jvnv_corpus)（CC BY-SA 4.0）和 [CREMA-D](https://github.com/CheyneyComputerScience/CREMA-D)（ODbL / DbCL）片段，仓库里不包含任何音频文件。README 的截图用的是 LJSpeech 和 AISHELL-3 的零样本示例声音。
 
 ## 目录结构
 
 ```
-backend/charavoice/   Python 后端（FastAPI、引擎管理、播放、听写、素材、训练、声线调节、自然度、模型管理、CLI、MCP）
-app/                  Tauri v2 界面（Vite + Preact + TypeScript）
-Docs/                 技术实现说明
-scripts/              源码安装脚本、后端打包与安装包构建脚本
-engines/ models/ data/  本地大文件与用户数据（不进版本库）
+backend/charavoice/   Python 后台（FastAPI、引擎管理、素材、训练、朗读、听写、MCP、命令行）
+backend/tests/        单元测试
+app/                  Tauri v2 桌面外壳（Rust）与界面（Vite + Preact + TypeScript）
+Docs/                 技术文档与截图
+scripts/              源码安装、后端打包、安装包构建脚本
+engines/ models/ data/  本地引擎、模型与用户数据（不进版本库）
 ```
-
-## 使用边界
-
-- 只能用于**本人的声音**、**已获得本人明确授权的声音**，或用文字设计的合成声音。新建声音时必须选择其一并确认，确认时间写入该声音的项目文件；录制电脑声音前会再次确认。
-- 模仿他人声音前，请告知被模仿的人并取得其单独同意。
-- 不得用于冒充他人、诈骗、诽谤或其他违法用途。接口生成的音频会写入“AI 合成”标识和 AudioSeal 水印（流式输出和本机播放不加水印；经有损压缩后水印仍可检测，但 16 位标识可能读不出）。
 
 ## 许可证
 
-本仓库代码以 [MIT](LICENSE) 许可发布。CharaVoice 不包含、也不分发任何第三方模型权重或引擎文件，它们在“模型”页（或 `setup.bat`）里从官方地址下载，各自遵循原许可：
-
-| 组件 | 用途 | 许可 |
-| --- | --- | --- |
-| [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)（代码与预训练权重） | 语音合成与训练引擎 | MIT |
-| UVR5 / BS-Roformer 分离模型（随 GPT-SoVITS 整合包提供） | 人声分离 | 随整合包分发，遵循其各自来源的许可 |
-| [OmniVoice](https://github.com/k2-fsa/OmniVoice)（可选） | 零样本引擎、文字设计声音 | 代码 Apache-2.0；权重许可以模型页为准 |
-| [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | 语音识别、VAD、声纹推理 | Apache-2.0 |
-| [Silero VAD](https://github.com/snakers4/silero-vad) | 语音活动检测 | MIT |
-| [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice)（sherpa-onnx 转换版） | 中英日韩粤语音识别 | FunASR Model Open Source License v1.1：模型来自阿里巴巴通义实验室 FunAudioLLM / FunASR 项目，使用时需保留来源与模型名称 |
-| [3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++（sherpa-onnx 转换版） | 声纹相似度 | Apache-2.0 |
-| [AudioSeal](https://github.com/facebookresearch/audioseal) | 音频水印 | MIT（代码与权重） |
-| [PyTorch](https://pytorch.org/)（CPU 版） | AudioSeal 推理 | BSD-3-Clause |
-| [pyworld](https://github.com/JeremyCCHsu/Python-Wrapper-for-World-Vocoder)（WORLD） | 声线调节的基频检测（DIO / StoneMask） | MIT（WORLD 为修改版 BSD） |
-| [SciPy](https://scipy.org/) | 自然度后处理链的滤波、重采样 | BSD-3-Clause |
-| [pyloudnorm](https://github.com/csteinmetz1/pyloudnorm) | 响度测量（ITU-R BS.1770） | MIT |
-| [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) | WASAPI 回环录音 | Apache-2.0（内含 PortAudio，MIT） |
-| [Tauri](https://tauri.app/) | 桌面外壳 | MIT / Apache-2.0 |
-| [FastAPI](https://fastapi.tiangolo.com/)、[Preact](https://preactjs.com/)、[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | 后端框架、界面框架、MCP 服务器 | MIT |
-| [PyInstaller](https://pyinstaller.org/)、[NSIS](https://nsis.sourceforge.io/) | 构建安装包（不随代码分发） | GPL-2.0 含 bootloader 例外（打包产物不受 GPL 约束）、zlib |
-
-听写模型可以在设置里切换为 Whisper（sherpa-onnx 转换版，MIT）。开发测试只使用了公有领域的 [LJSpeech](https://keithito.com/LJ-Speech-Dataset/) 数据集、[CREMA-D](https://github.com/CheyneyComputerScience/CREMA-D)（ODbL / DbCL）片段、[JVNV](https://sites.google.com/site/shinnosuketakamichi/research-topics/jvnv_corpus)（CC BY-SA 4.0）片段和程序生成的音频，仓库里不包含任何音频文件。
+本仓库代码以 [MIT](LICENSE) 许可发布，Copyright (c) 2026 RudAns。第三方组件和模型遵循上表中各自的许可。
